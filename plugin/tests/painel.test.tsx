@@ -129,18 +129,36 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas
     const rodando = texto(await ui.find({ key: 'r-1-a' }))
     expect(rodando).toMatch(/Build alfa/)
     // ±1 s: o relógio anda entre montar a ficha e desenhar.
-    expect(rodando).toMatch(/há (29|30|31|32)s · est\. 2m30s/)
-    expect(rodando).toMatch(/▰+▱+ cargo build -p alfa/)
-    // Cada cartão tem só duas linhas: cabeçalho e comando com os botões.
+    expect(rodando).toMatch(/▰+▱+ há (29|30|31|32)s · est\. 2m30s/)
+    expect(rodando).toMatch(/cargo build -p alfa/)
+    // Um cartão por seção, com a borda na cor dela e o estado no cabeçalho.
+    for (const [key, borderColor, estado] of [
+      ['sec-rodando', 'claude', /^Rodando ● 1 rodando/],
+      ['sec-fila', 'suggestion', /^Na fila 2 na fila/],
+      ['sec-sessoes', 'merged', /^Sessões ativas 1 ativa /],
+    ] as const) {
+      const sec = await ui.find({ key })
+      expect(sec?.props).toMatchObject({ borderStyle: 'round', borderColor, borderDimColor: false, paddingX: 1 })
+      expect(texto(sec)).toMatch(estado)
+    }
+    // Cada item tem três linhas: nome, tempos e comando com os botões.
     const cartoes = (await ui.findAll({ type: 'Box' })).filter(b => /^[rq]-/.test(b.key ?? ''))
     expect(cartoes.map(b => b.key)).toEqual(['r-1-a', 'q-3-c', 'q-2-b'])
-    for (const c of cartoes) expect(filhosBox(c)).toHaveLength(2)
+    for (const c of cartoes) expect(filhosBox(c)).toHaveLength(3)
     expect(texto(cartoes[1])).toMatch(/^#1 Build gama/)
     expect(texto(cartoes[2])).toMatch(/^#2 Build beta/)
     for (const b of await ui.findAll({ type: 'Button' })) if (b.key !== 'pausa') expect(b.props.plain).toBe(true)
     const rotulos = (ks: string[]) => Promise.all(ks.map(async k => (await ui.find({ key: k }))?.text))
+    // Os botões ficam lado a lado (um Fragment os empilharia numa coluna), com o ↟ primeiro.
+    const fileira = await ui.find({ key: 'bt-q-3-c' })
+    expect(fileira?.props.flexDirection).toBe('row')
+    expect((fileira?.children as { props: { key?: string } }[]).map(b => b.props.key)).toEqual(
+      ['t-3-c', 'c-3-c', 'b-3-c', 'x-3-c'].map(k => (surface === 'desktop' ? `d${k}` : k)),
+    )
+    // Sessão sem id do app: o nome é só texto.
+    expect(await ui.find({ key: 'ir-s2' })).toBeUndefined()
     if (surface === 'desktop') {
-      expect(await rotulos(['l-1-a', 'm-1-a', 'c-3-c', 'b-3-c', 't-3-c', 'x-3-c'])).toEqual(['📄', '✕', '↑', '↓', '↟', '✕'])
+      expect(await rotulos(['l-1-a', 'm-1-a', 't-3-c', 'c-3-c', 'b-3-c', 'x-3-c'])).toEqual(['🗋', '×', '↟', '↑', '↓', '×'])
       // A descrição fica escondida e aparece no hover.
       const escondida = filhosBox(await ui.find({ key: 'dx-3-c' }))[0] as { props: Record<string, unknown> }
       // O kit de teste não devolve o hover nas props: confere só que a dica nasce escondida e fora do fluxo.
@@ -181,6 +199,13 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas
   expect(await ui.find({ type: 'Text', text: /^linha 10$/ })).toBeUndefined()
   expect((await ui.find({ type: 'Text', text: /^linha 30$/ }))?.text).toBe('linha 30')
   expect((await ui.find({ type: 'Text', text: /^linha 11$/ }))?.text).toBe('linha 11')
+
+  // Pausada: a fila está parada, e a borda dela esmaece.
+  arq.set(`${DADOS}\\pausa`, '')
+  await ui.press({ key: 'l-1-a' })
+  const parada = await ui.find({ key: 'sec-fila' })
+  expect(parada?.props.borderDimColor).toBe(true)
+  expect(texto(parada)).toMatch(/^Na fila pausada · 2/)
   await ui.unmount()
 })
 
@@ -213,7 +238,8 @@ test('árvore de sessões: mãe com subagente, filha aninhada com subagente; ina
     ],
     [`${DADOS}\\sessoes\\p.json`, sessao('p', { nome: 'Parada', ccd: 'local_p', modelo: 'claude-opus-5-5', trabalhando: false })],
   ])
-  disco(on, arq, [])
+  const rodados: string[][] = []
+  disco(on, arq, rodados)
   on('command.register', () => ({ value: { command: 'fila' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: 'K:\\src', surface: 'desktop', isInteractive: true })
@@ -226,14 +252,22 @@ test('árvore de sessões: mãe com subagente, filha aninhada com subagente; ina
     expect(linhas[0]?.props.paddingLeft).toBe(0)
     expect(linhas[1]?.props.paddingLeft).toBe(2)
     const mae = texto(linhas[0])
-    expect(mae).toMatch(/^Breath of Fire IV \(Opus 5\.5 High\) ●/)
+    expect(mae).toMatch(/^Breath of Fire IV (Ir para a sessão )?\(Opus 5\.5 High\) ●/)
     expect(mae).toMatch(/⌊ Sonnet 5\.5 \(Tradução\) \[Subagente\]/)
     const filha = texto(linhas[1])
-    expect(filha).toMatch(/^• Defeito na Sombra \(Opus 5\.5 High\) \(Sessão filha\) \?/)
+    expect(filha).toMatch(/^• Defeito na Sombra (Ir para a sessão )?\(Opus 5\.5 High\) \(Sessão filha\) \?/)
     expect(filha).toMatch(/⌊ Haiku 5\.5 \(Pesquisa sobre Vulkan\) \[Subagente\]/)
     expect(await ui.find({ type: 'Text', text: /Parada/ })).toBeUndefined()
     if (surface === 'desktop') expect(texto(await ui.find({ key: 'e-f' }))).toMatch(/Esperando resposta sua/)
     else expect(filha).toMatch(/\? esperando resposta sua/)
+    // Seções vazias: borda esmaecida.
+    expect(texto(await ui.find({ key: 'sec-rodando' }))).toMatch(/^Rodando ○ parada/)
+    expect((await ui.find({ key: 'sec-rodando' }))?.props.borderDimColor).toBe(true)
+    expect(texto(await ui.find({ key: 'sec-fila' }))).toMatch(/^Na fila ○ vazia/)
+    // Clicar no nome da sessão abre o link dela no app.
+    rodados.length = 0
+    await ui.press({ key: 'ir-f' })
+    expect(rodados).toEqual([['rundll32.exe', 'url.dll,FileProtocolHandler', 'claude://claude.ai/epitaxy/local_f']])
     await ui.unmount()
   }
 })

@@ -286,8 +286,21 @@ e: { session_id: string; cwd: string; transcript_path: string; background_tasks?
   await publicar($, e.session_id, e.cwd)
 }
 
+// Abre a sessão no app desktop pelo link claude:// dele (o Link do mod só abre https no desktop).
+// shortcut: formato do campo `link` de list_sessions; se o app mudar o endereço, atualizar aqui.
+const ID_DO_APP = /^local_[\w-]+$/
+async function irPara($: Api, ccd: string): Promise<void> {
+  try {
+    const r = await $.process.run(['rundll32.exe', 'url.dll,FileProtocolHandler', `claude://claude.ai/epitaxy/${ccd}`])
+    await update($, aviso, () => (r.exitCode === 0 ? '' : `Não deu para abrir a sessão (código ${r.exitCode})`))
+  } catch (erro) {
+    await update($, aviso, () => `Não deu: ${String(erro)}`)
+  }
+}
+
 // Uma cor por tipo, das cores do tema, para achar o item de olho.
-function corDoTipo(tipo: string): 'suggestion' | 'success' | 'claude' | 'warning' | 'merged' | undefined {
+type Cor = 'suggestion' | 'success' | 'claude' | 'warning' | 'merged'
+function corDoTipo(tipo: string): Cor | undefined {
   if (tipo === 'Build') return 'suggestion'
   if (tipo === 'Teste') return 'success'
   if (tipo === 'Jogo') return 'claude'
@@ -452,14 +465,15 @@ export const register: Register = on => {
 
     // A descrição aparece ao passar o mouse: um Box com key é o escopo do hover, e o cartão escondido
     // (absolute, fora do fluxo) aparece por cima sem mexer no resto.
-    const dica = (key: string, texto: string, alvo: RenderChildren) => (
-      <Box key={key} flexShrink={0}>
+    const dica = (key: string, texto: string, alvo: RenderChildren, lado: 'left' | 'right' = 'right') => (
+      <Box key={key} flexShrink={lado === 'right' ? 0 : 1} minWidth={3} justifyContent="center">
         {alvo}
-        <Box position="absolute" top={1} right={0} display="none" hover={{ display: 'flex' }} backgroundColor="text" paddingX={1}>
+        <Box position="absolute" top={1} {...{ [lado]: 0 }} display="none" hover={{ display: 'flex' }} backgroundColor="text" paddingX={1}>
           <Text color="inverseText" wrap="truncate-end">{texto}</Text>
         </Box>
       </Box>
     )
+    // Ícones em texto: Button só aceita texto dentro (não um Svg). Todos em traço, sem versão emoji colorida.
     const botao = (key: string, icone: string, texto: string, acao: () => unknown) =>
       terminal ? (
         <Button key={key} plain onPress={acao}>{texto}</Button>
@@ -467,38 +481,62 @@ export const register: Register = on => {
         dica(`d${key}`, texto, <Button key={key} plain onPress={acao}>{icone}</Button>)
       )
 
-    const secao = (titulo: string, n: number) => (
-      <Box flexDirection="row" gap={1}>
-        <Text bold>{titulo}</Text>
-        <Text dimColor>· {n}</Text>
+    // Um cartão por seção: borda e título na cor dela, borda esmaecida quando parada ou vazia.
+    const secao = (key: string, titulo: string, cor: Cor, ativa: boolean, estado: string, corpo: RenderChildren) => (
+      <Box key={key} flexDirection="column" borderStyle="round" borderColor={cor} borderDimColor={!ativa} paddingX={1}>
+        <Box flexDirection="row" justifyContent="space-between" gap={1}>
+          <Text bold color={cor} wrap="truncate-end">{titulo}</Text>
+          <Box flexShrink={0}>
+            <Text color={cor} dimColor={!ativa}>{estado}</Text>
+          </Box>
+        </Box>
+        <Box flexDirection="column" gap={1}>{corpo}</Box>
       </Box>
     )
-    // Cartão de 2 linhas, mesmo com o painel estreito: o que não cabe é cortado com reticências.
-    //   1: #n, tipo, nome | tempos
-    //   2: barra e comando | botões
-    const cartao = (
+    // Coluna de largura fixa, para as linhas ficarem alinhadas.
+    const coluna = (largura: number, conteudo?: RenderChildren) => (
+      <Box width={largura} flexShrink={0}>{conteudo}</Box>
+    )
+    // O resto da linha: ocupa o que sobra e é cortado.
+    const resto = (...conteudo: RenderChildren[]) => (
+      <Box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} overflow="hidden">{conteudo}</Box>
+    )
+    const tempos = (inicio: string, segundos: number, prev: number | undefined, fim = '') => (
+      <Text wrap="truncate-end">
+        <Text dimColor>{inicio}</Text>
+        <Text bold>{dur(segundos)}</Text>
+        {prev !== undefined && <Text dimColor> · est. </Text>}
+        {prev !== undefined && <Text bold>{dur(prev)}</Text>}
+        <Text dimColor>{fim}</Text>
+      </Text>
+    )
+    // Item de 3 linhas: marca, tipo e nome; rótulo, barra e tempos; comando e botões.
+    const item = (
       key: string,
-      cabeca: string,
+      marca: string,
+      cor: Cor,
       tipo: string,
       nome: string,
-      tempos: string,
-      linha2: RenderChildren,
-      botoes: RenderChildren,
+      rotulo: string,
+      tempo: RenderChildren[],
+      cmd: string,
+      botoes: RenderChildren[],
     ) => (
       <Box key={key} flexDirection="column">
-        <Box flexDirection="row" justifyContent="space-between" gap={1}>
-          <Box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} overflow="hidden">
-            {cabeca !== '' && <Text dimColor wrap="truncate-end">{cabeca}</Text>}
-            <Text bold color={corDoTipo(tipo)} wrap="truncate-end">{tipo}</Text>
-            <Text bold wrap="truncate-end">{nome}</Text>
-          </Box>
-          <Text dimColor wrap="truncate-end">{tempos}</Text>
+        <Box flexDirection="row" gap={1}>
+          {coluna(3, <Text color={cor}>{marca}</Text>)}
+          {coluna(8, <Text bold color={corDoTipo(tipo)} wrap="truncate-end">{tipo}</Text>)}
+          {resto(<Text bold wrap="truncate-end">{nome}</Text>)}
         </Box>
-        <Box flexDirection="row" justifyContent="space-between" gap={1}>
-          <Box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} overflow="hidden">
-            {linha2}
-          </Box>
-          <Box flexDirection="row" gap={1} flexShrink={0} flexWrap="nowrap">
+        <Box flexDirection="row" gap={1}>
+          {coluna(3)}
+          {coluna(8, <Text dimColor>{rotulo}</Text>)}
+          {resto(...tempo)}
+        </Box>
+        <Box flexDirection="row" gap={1}>
+          {coluna(3)}
+          {resto(<Text dimColor wrap="truncate-end">{curto(cmd, 200)}</Text>)}
+          <Box key={`bt-${key}`} flexDirection="row" gap={1} flexShrink={0} flexWrap="nowrap">
             {botoes}
           </Box>
         </Box>
@@ -518,6 +556,25 @@ export const register: Register = on => {
         dica(`e-${s.sessao}`, texto, <Text color={cor}>{sim}</Text>)
       )
     }
+    // Clicar no nome abre a sessão no app. Sem id do app (sessão de terminal), o nome é só texto.
+    const nomeDaSessao = (s: Sessao) => {
+      const nome = <Text bold wrap="truncate-end">{s.nome}</Text>
+      const ccd = s.ccd
+      if (!ccd || !ID_DO_APP.test(ccd)) return nome
+      const link = <Button key={`ir-${s.sessao}`} plain onPress={() => irPara($, ccd)}>{nome}</Button>
+      return terminal ? link : dica(`dir-${s.sessao}`, 'Ir para a sessão', link, 'left')
+    }
+    // Linha debaixo da sessão: subagente ou tarefa de fundo.
+    const filha = (key: string, rotulo: string, cor: Cor | undefined, descricao: string, direita: string) => (
+      <Box key={key} flexDirection="row" gap={1} paddingLeft={1}>
+        {coluna(1, <Text dimColor>⌊</Text>)}
+        {coluna(11, <Text bold color={cor} wrap="truncate-end">{rotulo}</Text>)}
+        {resto(<Text wrap="truncate-end">{descricao}</Text>)}
+        <Box flexShrink={0}>
+          <Text dimColor>{direita}</Text>
+        </Box>
+      </Box>
+    )
     const arvore = arvoreDeSessoes(f.sessoes)
 
     return (
@@ -532,100 +589,108 @@ export const register: Register = on => {
         {msg !== '' && <Text color="error">{msg}</Text>}
         {f.erro && <Text color="error">Erro ao ler a pasta: {f.erro}</Text>}
 
-        <Box flexDirection="column">
-          {secao('Rodando', nRodando)}
-          {nRodando === 0 && <Text dimColor>nada rodando</Text>}
-          {f.rodando.map(r => {
+        {secao('sec-rodando', 'Rodando', 'claude', nRodando > 0, nRodando > 0 ? `● ${nRodando} rodando` : '○ parada', [
+          ...f.rodando.map(r => {
             const passou = desde(r.comeco, f.agora)
             const prev = estimativa(f.historico, r.tipo, r.pasta)
-            const tempos = `há ${dur(passou)}${prev === undefined ? '' : ` · est. ${dur(prev)}`}${r.vagas > 1 ? ' · 2 vagas' : ''}`
-            return cartao(
+            return item(
               `r-${r.id}`,
-              '',
+              '●',
+              'claude',
               r.tipo,
               r.nome,
-              tempos,
+              'tempo',
               [
-                ...(prev === undefined ? [] : [<Text color={corDoTipo(r.tipo)} wrap="truncate-end">{barra(Math.min(passou, prev), prev)}</Text>]),
-                <Text dimColor wrap="truncate-end">{curto(r.cmd, 200)}</Text>,
+                prev !== undefined && (
+                  <Box flexShrink={0}>
+                    <Text color={corDoTipo(r.tipo)}>{barra(Math.min(passou, prev), prev)}</Text>
+                  </Box>
+                ),
+                tempos('há ', passou, prev, r.vagas > 1 ? ' · 2 vagas' : ''),
               ],
-              <>
-                {botao(`l-${r.id}`, '📄', 'Log', () => verLog(r.id))}
-                {botao(`m-${r.id}`, '✕', 'Matar', () => controlar($, ['-Cancelar', r.id]))}
-              </>,
+              r.cmd,
+              [
+                botao(`l-${r.id}`, '🗋', 'Log', () => verLog(r.id)),
+                botao(`m-${r.id}`, '×', 'Matar', () => controlar($, ['-Cancelar', r.id])),
+              ],
             )
-          })}
-          {f.velhas.map(v => (
+          }),
+          ...f.velhas.map(v => (
             <Text dimColor wrap="truncate-end">
               {v.vaga} · {v.nome} · versão antiga do script{v.desde ? ` · desde ${v.desde}` : ''}
             </Text>
-          ))}
-        </Box>
+          )),
+        ])}
 
-        <Box flexDirection="column">
-          {secao('Na fila', f.fila.length)}
-          {f.fila.length === 0 && <Text dimColor>fila vazia</Text>}
-          {f.fila.map((q, i) => {
-            const prev = estimativa(f.historico, q.tipo, q.pasta)
-            return cartao(
+        {secao(
+          'sec-fila',
+          'Na fila',
+          'suggestion',
+          f.fila.length > 0 && !f.pausada,
+          f.pausada ? `pausada · ${f.fila.length}` : f.fila.length > 0 ? `${f.fila.length} na fila` : '○ vazia',
+          f.fila.map((q, i) =>
+            item(
               `q-${q.id}`,
               `#${i + 1}`,
+              'suggestion',
               q.tipo,
               q.nome,
-              `espera ${dur(desde(q.criado, f.agora))}${prev === undefined ? '' : ` · est. ${dur(prev)}`}`,
-              <Text dimColor wrap="truncate-end">{curto(q.cmd, 200)}</Text>,
-              <>
-                {botao(`c-${q.id}`, '↑', 'Subir', () => controlar($, ['-Mover', q.id, 'cima']))}
-                {botao(`b-${q.id}`, '↓', 'Descer', () => controlar($, ['-Mover', q.id, 'baixo']))}
-                {botao(`t-${q.id}`, '↟', 'Topo', () => controlar($, ['-Mover', q.id, 'topo']))}
-                {botao(`x-${q.id}`, '✕', 'Cancelar', () => controlar($, ['-Cancelar', q.id]))}
-              </>,
-            )
-          })}
-        </Box>
+              'espera',
+              [tempos('', desde(q.criado, f.agora), estimativa(f.historico, q.tipo, q.pasta))],
+              q.cmd,
+              [
+                botao(`t-${q.id}`, '↟', 'Topo', () => controlar($, ['-Mover', q.id, 'topo'])),
+                botao(`c-${q.id}`, '↑', 'Subir', () => controlar($, ['-Mover', q.id, 'cima'])),
+                botao(`b-${q.id}`, '↓', 'Descer', () => controlar($, ['-Mover', q.id, 'baixo'])),
+                botao(`x-${q.id}`, '×', 'Cancelar', () => controlar($, ['-Cancelar', q.id])),
+              ],
+            ),
+          ),
+        )}
 
-        <Box flexDirection="column">
-          {secao('Sessões ativas', arvore.length)}
-          {arvore.length === 0 && <Text dimColor>nenhuma</Text>}
-          {arvore.map(({ s, nivel }) => {
+        {secao(
+          'sec-sessoes',
+          'Sessões ativas',
+          'merged',
+          arvore.length > 0,
+          arvore.length > 0 ? `${arvore.length} ativa${arvore.length > 1 ? 's' : ''}` : '○ nenhuma',
+          arvore.map(({ s, nivel }) => {
             const modelo = nomeDoModelo(s.modelo, s.esforco)
             return (
               <Box key={`s-${s.sessao}`} flexDirection="column" paddingLeft={nivel * 2}>
-                <Box flexDirection="row" gap={1}>
-                  <Box flexDirection="row" gap={1} flexShrink={1} overflow="hidden">
+                <Box flexDirection="row" justifyContent="space-between" gap={1}>
+                  <Box flexDirection="row" gap={1} flexShrink={1}>
                     {nivel > 0 && <Text dimColor>•</Text>}
-                    <Text bold wrap="truncate-end">{s.nome}</Text>
-                    {modelo !== '' && <Text dimColor wrap="truncate-end">({modelo})</Text>}
+                    {nomeDaSessao(s)}
+                    {modelo !== '' && <Text color="merged" wrap="truncate-end">({modelo})</Text>}
                     {s.ccdPai && <Text dimColor wrap="truncate-end">(Sessão filha)</Text>}
                   </Box>
                   {estado(s)}
                 </Box>
-                {(s.subagentes ?? []).map(a => (
-                  <Box key={`a-${s.sessao}-${a.id}`} flexDirection="row" gap={1} paddingLeft={1}>
-                    <Text dimColor>⌊</Text>
-                    <Text color="merged" wrap="truncate-end">{nomeDoModelo(a.modelo) || a.tipo}</Text>
-                    <Text wrap="truncate-end">({a.descricao})</Text>
-                    <Text dimColor wrap="truncate-end">[Subagente]</Text>
-                  </Box>
-                ))}
-                {tarefasDaSessao(s).map(t => (
-                  <Box key={`o-${s.sessao}-${t.id}`} flexDirection="row" gap={1} paddingLeft={1}>
-                    <Text dimColor>⌊</Text>
-                    <Text color={corDoTipo(tipoDaTarefa(t))}>{tipoDaTarefa(t)}</Text>
-                    <Text dimColor wrap="truncate-end">{curto(t.command ?? t.description, 200)}</Text>
-                    {t.desde !== undefined && <Text dimColor>há {dur((f.agora - t.desde) / 1000)}</Text>}
-                  </Box>
-                ))}
+                {(s.subagentes ?? []).map(a =>
+                  filha(`a-${s.sessao}-${a.id}`, nomeDoModelo(a.modelo) || a.tipo, 'merged', `(${a.descricao})`, '[Subagente]'),
+                )}
+                {tarefasDaSessao(s).map(t => {
+                  // "Subagente (Explore)": o tipo fica na coluna e o resto abre a descrição.
+                  const [tipo = '', ...extra] = tipoDaTarefa(t).split(' ')
+                  return filha(
+                    `o-${s.sessao}-${t.id}`,
+                    tipo,
+                    corDoTipo(tipo),
+                    [...extra, curto(t.command ?? t.description, 200)].join(' '),
+                    t.desde === undefined ? '' : `há ${dur((f.agora - t.desde) / 1000)}`,
+                  )
+                })}
               </Box>
             )
-          })}
-        </Box>
+          }),
+        )}
 
         {f.log && (
           <Box flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
             <Box flexDirection="row" justifyContent="space-between" gap={1}>
               <Text bold wrap="truncate-end">Log: {f.log.titulo}</Text>
-              {botao('fechar-log', '✕', 'Fechar log', () => verLog(f.log?.id ?? ''))}
+              {botao('fechar-log', '×', 'Fechar log', () => verLog(f.log?.id ?? ''))}
             </Box>
             {f.log.linhas.length === 0 && <Text dimColor>(vazio)</Text>}
             {f.log.linhas.map(l => (
