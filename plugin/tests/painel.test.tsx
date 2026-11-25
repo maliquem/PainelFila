@@ -260,6 +260,7 @@ test('a sessão publica quem é, se trabalha, os subagentes vivos, e avisa pedid
   on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'ag1' }))
   on('classic.Stop', () => ({}))
   on('classic.PermissionRequest', () => ({}))
+  on('tool.call', () => ({ result: {} }))
   const lido = () => JSON.parse(arq.get(`${DADOS}\\sessoes\\s1.json`)!)
 
   await $.session.start({ cwd: 'K:\\src', surface: 'desktop', isInteractive: true })
@@ -267,12 +268,25 @@ test('a sessão publica quem é, se trabalha, os subagentes vivos, e avisa pedid
   await $.turn.start({ text: 'oi', turnId: 't1' })
   expect(lido()).toMatchObject({ nome: 'Defeito na Sombra', ccd: 'local_f', ccdPai: 'local_m', modelo: 'claude-opus-5-5', esforco: 'high', trabalhando: true })
 
-  await $.agent.spawn({ prompt: 'procura', description: 'Pesquisa sobre Vulkan', subagentType: 'Explore', model: 'haiku' })
+  await $.agent.spawn({
+    prompt: 'procura',
+    description: 'Pesquisa sobre Vulkan',
+    subagentType: 'Explore',
+    model: 'haiku',
+    tool_use_id: 'tu1',
+    provider: { plugin: 'engine', tier: 'core' },
+    parentModel: 'claude-opus-5-5',
+    background: true,
+    fork: false,
+  })
   expect(lido().subagentes).toMatchObject([{ id: 'ag1', modelo: 'claude-haiku-5-5', descricao: 'Pesquisa sobre Vulkan', tipo: 'Explore' }])
 
   await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'ls' } })
   expect(lido().esperando).toBe(true)
   expect(avisos.at(-1)).toEqual({ text: 'Pede permissão: Bash', title: 'Defeito na Sombra', key: 'pedido-s1' })
+  // Uma ferramenta que começa depois do pedido (de um subagente, por exemplo) não o responde.
+  await $.tool.call({ tool: 'Read', file_path: 'K:\a.txt' })
+  expect(lido().esperando).toBe(true)
 
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'u1', reason: 'answer', agentId: 'ag1' })
   expect(lido().subagentes).toEqual([])

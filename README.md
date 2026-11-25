@@ -25,10 +25,14 @@ Teste: `pwsh -NoProfile -File fila/teste-fila.ps1` (usa uma pasta temporária, n
 
 O painel abre sozinho no começo de toda sessão. Se for fechado, `/fila` abre de novo. Ele mostra:
 
-- **Rodando**: tipo, sessão, comando, há quanto tempo e o tempo estimado (média das últimas 5 do mesmo tipo e pasta). Tem os botões Matar e Log.
-- **Na fila**: a posição, com os botões ↑, ↓, Topo e Cancelar.
-- **Outras tarefas de fundo**: comandos em segundo plano, subagentes e monitores de todas as sessões abertas.
+- **Rodando**: tipo, nome, comando, há quanto tempo, o tempo estimado (média das últimas 5 do mesmo tipo e pasta) e uma barra de progresso. Botões 📄 (log) e ✕ (matar).
+- **Na fila**: a posição, com os botões ↑, ↓, ↟ (topo) e ✕ (cancelar).
+- **Sessões ativas**: as sessões que estão trabalhando, esperando resposta sua ou com algo em segundo plano, em árvore (a sessão filha abaixo da mãe). Embaixo de cada uma, os subagentes (modelo e o que fazem) e os comandos de fundo fora da fila. O símbolo diz o estado: ● trabalhando, ? esperando você, ◌ só coisas de fundo.
 - **Pausar fila / Soltar fila**: enquanto pausada, nenhum pedido novo começa.
+
+Cada cartão ocupa duas linhas; no app desktop os botões são ícones e a descrição aparece ao passar o mouse (no terminal, a palavra).
+
+Cada sessão avisa (`$.ui.notify`) quando pede permissão ou faz uma pergunta e quando termina o turno. No app desktop esse aviso do mod não tem onde aparecer; lá valem os banners do próprio app (Configurações, notificações de permissão, pergunta e tarefa concluída).
 
 Quando algo da fila termina, aparece um aviso com o código de saída. O aviso sai na sessão dona do pedido e em toda sessão que estiver com o painel aberto (por padrão, todas).
 

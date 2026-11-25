@@ -171,7 +171,15 @@ async function avisar($: Api): Promise<void> {
   for (const h of novos) if (aberto || h.sessao === eu) $.ui.toast(textoDoAviso(h))
 }
 
-async function publicar($: Api, sessao: string, pasta: string, encerrada = false): Promise<void> {
+// As publicações vão uma de cada vez: duas em paralelo poderiam gravar a foto mais velha por último.
+let publicando: Promise<unknown> = Promise.resolve()
+function publicar($: Api, sessao: string, pasta: string, encerrada = false): Promise<void> {
+  const vez = publicando.then(() => gravarSessao($, sessao, pasta, encerrada))
+  publicando = vez.catch(() => undefined)
+  return vez
+}
+
+async function gravarSessao($: Api, sessao: string, pasta: string, encerrada: boolean): Promise<void> {
   const env = await $.process.hookEnv()
   const quem = await read($, eu)
   // Subagente cujo fim o mod não ouviu (recarregado no meio) sai quando o engine já não o tem rodando.
@@ -245,7 +253,9 @@ async function notificar($: Api, texto: string, chave: string): Promise<void> {
 // Pedido de permissão ou pergunta: a sessão fica "esperando" e avisa. Os sinais do mesmo pedido
 // (PermissionRequest e Notification) chegam juntos: avisa uma vez só.
 let ultimoPedido = 0
+let pediuEm = 0
 async function precisaDela($: Api, texto: string): Promise<void> {
+  pediuEm = Date.now()
   await update($, esperando, () => true)
   await publicarAqui($)
   if (Date.now() - ultimoPedido < 5000) return
@@ -382,9 +392,11 @@ export const register: Register = on => {
 
   // Comando, subagente ou monitor que vai para o fundo aparece já, sem esperar o fim do turno.
   on('tool.call', async ($, e, next) => {
+    const inicio = Date.now()
     if (e.tool === 'AskUserQuestion') await precisaDela($, 'Tem uma pergunta para você').catch(() => undefined)
     const ran = await next(e)
-    if (await read($, esperando)) {
+    // Só a chamada que esperou pelo pedido o responde: a de um subagente que termina no meio não.
+    if (pediuEm >= inicio && (await read($, esperando))) {
       await update($, esperando, () => false)
       await publicarAqui($)
     }
@@ -476,8 +488,8 @@ export const register: Register = on => {
       <Box key={key} flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between" gap={1}>
           <Box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} overflow="hidden">
-            {cabeca !== '' && <Text dimColor>{cabeca}</Text>}
-            <Text bold color={corDoTipo(tipo)}>{tipo}</Text>
+            {cabeca !== '' && <Text dimColor wrap="truncate-end">{cabeca}</Text>}
+            <Text bold color={corDoTipo(tipo)} wrap="truncate-end">{tipo}</Text>
             <Text bold wrap="truncate-end">{nome}</Text>
           </Box>
           <Text dimColor wrap="truncate-end">{tempos}</Text>
@@ -534,7 +546,7 @@ export const register: Register = on => {
               r.nome,
               tempos,
               [
-                ...(prev === undefined ? [] : [<Text color={corDoTipo(r.tipo)}>{barra(Math.min(passou, prev), prev)}</Text>]),
+                ...(prev === undefined ? [] : [<Text color={corDoTipo(r.tipo)} wrap="truncate-end">{barra(Math.min(passou, prev), prev)}</Text>]),
                 <Text dimColor wrap="truncate-end">{curto(r.cmd, 200)}</Text>,
               ],
               <>
@@ -591,9 +603,9 @@ export const register: Register = on => {
                 {(s.subagentes ?? []).map(a => (
                   <Box key={`a-${s.sessao}-${a.id}`} flexDirection="row" gap={1} paddingLeft={1}>
                     <Text dimColor>⌊</Text>
-                    <Text color="merged">{nomeDoModelo(a.modelo) || a.tipo}</Text>
+                    <Text color="merged" wrap="truncate-end">{nomeDoModelo(a.modelo) || a.tipo}</Text>
                     <Text wrap="truncate-end">({a.descricao})</Text>
-                    <Text dimColor>[Subagente]</Text>
+                    <Text dimColor wrap="truncate-end">[Subagente]</Text>
                   </Box>
                 ))}
                 {tarefasDaSessao(s).map(t => (
