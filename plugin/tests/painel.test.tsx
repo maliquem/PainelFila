@@ -116,6 +116,10 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas
   ])
   const rodados: string[][] = []
   disco(on, arq, rodados)
+  const naLista: object[] = []
+  on('mcp.call', (_, e) => ({
+    value: { content: [{ type: 'text' as const, text: JSON.stringify(e.tool === 'list_sessions' ? naLista : {}) }], isError: false },
+  }))
   on('command.register', () => ({ value: { command: 'fila' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
 
@@ -155,8 +159,6 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas
     expect((fileira?.children as { props: { key?: string } }[]).map(b => b.props.key)).toEqual(
       ['t-3-c', 'c-3-c', 'b-3-c', 'x-3-c'].map(k => (surface === 'desktop' ? `d${k}` : k)),
     )
-    // Sessão sem id do app: o nome é só texto.
-    expect(await ui.find({ key: 'ir-s2' })).toBeUndefined()
     if (surface === 'desktop') {
       expect(await rotulos(['l-1-a', 'm-1-a', 't-3-c', 'c-3-c', 'b-3-c', 'x-3-c'])).toEqual(['🗋', '×', '↟', '↑', '↓', '×'])
       // A descrição fica escondida e aparece no hover.
@@ -170,8 +172,8 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas
     // Sessões ativas: as tarefas de fundo debaixo da sessão dona, sem as da fila.
     const s2 = texto(await ui.find({ key: 's-s2' }))
     expect(s2).toMatch(/Sessão Dois/)
-    expect(s2).toMatch(/⌊ Subagente \(Explore\) procura código/)
-    expect(s2).toMatch(/⌊ Teste pytest -q/)
+    expect(s2).toMatch(/⌞ Subagente \(Explore\) procura código/)
+    expect(s2).toMatch(/⌞ Teste pytest -q/)
     expect(await ui.find({ type: 'Text', text: /fila-build/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /não deve aparecer/ })).toBeUndefined()
     await ui.unmount()
@@ -192,6 +194,15 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas
   await ui.press({ key: 'pausa' })
   expect(rodados.map(a => a.slice(4).join(' '))).toEqual(['-Mover 2-b cima', '-Mover 2-b topo', '-Cancelar 3-c', '-Cancelar 1-a', '-Pausar'])
   expect(rodados[0]?.slice(0, 4)).toEqual(['pwsh', '-NoProfile', '-File', 'C:\\eu\\.claude\\scripts\\fila-build.ps1'])
+
+  // Sessão sem id publicado (mod antigo nela): o id vem do título; sem achar, avisa e não abre nada.
+  rodados.length = 0
+  await ui.press({ key: 'ir-s2' })
+  expect((await ui.find({ type: 'Text', text: /Não achei 'Sessão Dois'/ }))?.text).toBeDefined()
+  expect(rodados).toEqual([])
+  naLista.push({ sessionId: 'local_dois', title: 'Sessão Dois', cwd: 'K:\\src\\Outro' })
+  await ui.press({ key: 'ir-s2' })
+  expect(rodados).toEqual([['rundll32.exe', 'url.dll,FileProtocolHandler', 'claude://claude.ai/epitaxy/local_dois']])
 
   // Log da ficha rodando: últimas linhas.
   arq.set(`${DADOS}\\logs\\1-a.log`, Array.from({ length: 30 }, (_, i) => `linha ${i + 1}`).join('\r\n') + '\r\n')
@@ -253,10 +264,10 @@ test('árvore de sessões: mãe com subagente, filha aninhada com subagente; ina
     expect(linhas[1]?.props.paddingLeft).toBe(2)
     const mae = texto(linhas[0])
     expect(mae).toMatch(/^Breath of Fire IV (Ir para a sessão )?\(Opus 5\.5 High\) ●/)
-    expect(mae).toMatch(/⌊ Sonnet 5\.5 \(Tradução\) \[Subagente\]/)
+    expect(mae).toMatch(/⌞ Sonnet 5\.5 \(Tradução\) \[Subagente\]/)
     const filha = texto(linhas[1])
     expect(filha).toMatch(/^• Defeito na Sombra (Ir para a sessão )?\(Opus 5\.5 High\) \(Sessão filha\) \?/)
-    expect(filha).toMatch(/⌊ Haiku 5\.5 \(Pesquisa sobre Vulkan\) \[Subagente\]/)
+    expect(filha).toMatch(/⌞ Haiku 5\.5 \(Pesquisa sobre Vulkan\) \[Subagente\]/)
     expect(await ui.find({ type: 'Text', text: /Parada/ })).toBeUndefined()
     if (surface === 'desktop') expect(texto(await ui.find({ key: 'e-f' }))).toMatch(/Esperando resposta sua/)
     else expect(filha).toMatch(/\? esperando resposta sua/)

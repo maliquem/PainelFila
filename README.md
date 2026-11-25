@@ -27,7 +27,7 @@ O painel abre sozinho no começo de toda sessão. Se for fechado, `/fila` abre d
 
 - **Rodando**: tipo, nome, comando, há quanto tempo, o tempo estimado (média das últimas 5 do mesmo tipo e pasta) e uma barra ▰▱. Botões 🗋 (log) e × (matar).
 - **Na fila**: a posição, há quanto tempo espera e o comando, com os botões ↟ (topo), ↑, ↓ e × (cancelar).
-- **Sessões ativas**: as sessões que estão trabalhando, esperando resposta sua ou com algo em segundo plano, em árvore (a sessão filha abaixo da mãe). Embaixo de cada uma, os subagentes (modelo e o que fazem) e os comandos de fundo fora da fila. O símbolo diz o estado: ● trabalhando, ? esperando você, ◌ só coisas de fundo. Clicar no nome de uma sessão do app desktop leva até ela (abre o link `claude://` dela).
+- **Sessões ativas**: as sessões que estão trabalhando, esperando resposta sua ou com algo em segundo plano, em árvore (a sessão filha abaixo da mãe). Embaixo de cada uma, os subagentes (modelo e o que fazem) e os comandos de fundo fora da fila. O símbolo diz o estado: ● trabalhando, ? esperando você, ◌ só coisas de fundo. Clicar no nome de uma sessão do app desktop leva até ela (abre o link `claude://` dela; se ela ainda roda uma versão antiga do mod, é achada pelo título).
 - **Pausar fila / Soltar fila**: enquanto pausada, nenhum pedido novo começa.
 
 Cada seção é um cartão com a borda na cor dela, esmaecida quando está parada ou vazia, e o estado à direita do título. Cada item ocupa três linhas; no app desktop os botões são ícones e a descrição aparece ao passar o mouse (no terminal, a palavra).

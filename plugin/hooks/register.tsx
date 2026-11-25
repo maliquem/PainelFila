@@ -289,8 +289,23 @@ e: { session_id: string; cwd: string; transcript_path: string; background_tasks?
 // Abre a sessão no app desktop pelo link claude:// dele (o Link do mod só abre https no desktop).
 // shortcut: formato do campo `link` de list_sessions; se o app mudar o endereço, atualizar aqui.
 const ID_DO_APP = /^local_[\w-]+$/
-async function irPara($: Api, ccd: string): Promise<void> {
+// Sessão que ainda roda uma versão antiga do mod não publica o id: acha pelo título (a pasta desempata).
+async function idPeloTitulo($: Api, s: Sessao): Promise<string | undefined> {
+  const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 100 })
+  const bloco = r.content.find(c => c.type === 'text') as { text?: string } | undefined
+  const lista = JSON.parse(bloco?.text ?? '') as { sessionId: string; title?: string; cwd?: string }[]
+  let iguais = lista.filter(x => x.title === s.nome)
+  if (iguais.length > 1) iguais = iguais.filter(x => x.cwd?.toLowerCase() === s.pasta.toLowerCase())
+  return iguais.length === 1 ? iguais[0]?.sessionId : undefined
+}
+
+async function irPara($: Api, s: Sessao): Promise<void> {
   try {
+    const ccd = s.ccd || (await idPeloTitulo($, s))
+    if (!ccd || !ID_DO_APP.test(ccd)) {
+      await update($, aviso, () => `Não achei '${s.nome}' no app. Rode /reload-plugins nela.`)
+      return
+    }
     const r = await $.process.run(['rundll32.exe', 'url.dll,FileProtocolHandler', `claude://claude.ai/epitaxy/${ccd}`])
     await update($, aviso, () => (r.exitCode === 0 ? '' : `Não deu para abrir a sessão (código ${r.exitCode})`))
   } catch (erro) {
@@ -556,18 +571,16 @@ export const register: Register = on => {
         dica(`e-${s.sessao}`, texto, <Text color={cor}>{sim}</Text>)
       )
     }
-    // Clicar no nome abre a sessão no app. Sem id do app (sessão de terminal), o nome é só texto.
+    // Clicar no nome abre a sessão no app.
     const nomeDaSessao = (s: Sessao) => {
       const nome = <Text bold wrap="truncate-end">{s.nome}</Text>
-      const ccd = s.ccd
-      if (!ccd || !ID_DO_APP.test(ccd)) return nome
-      const link = <Button key={`ir-${s.sessao}`} plain onPress={() => irPara($, ccd)}>{nome}</Button>
+      const link = <Button key={`ir-${s.sessao}`} plain onPress={() => irPara($, s)}>{nome}</Button>
       return terminal ? link : dica(`dir-${s.sessao}`, 'Ir para a sessão', link, 'left')
     }
     // Linha debaixo da sessão: subagente ou tarefa de fundo.
     const filha = (key: string, rotulo: string, cor: Cor | undefined, descricao: string, direita: string) => (
       <Box key={key} flexDirection="row" gap={1} paddingLeft={1}>
-        {coluna(1, <Text dimColor>⌊</Text>)}
+        {coluna(1, <Text dimColor>⌞</Text>)}
         {coluna(11, <Text bold color={cor} wrap="truncate-end">{rotulo}</Text>)}
         {resto(<Text wrap="truncate-end">{descricao}</Text>)}
         <Box flexShrink={0}>
