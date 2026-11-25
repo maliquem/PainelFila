@@ -36,6 +36,17 @@ Testes do mod: `claude plugin validate plugin` e `claude plugin test plugin`.
 
 ## Instalar e reinstalar
 
+Do GitHub, numa sessão do Claude Code:
+
+```
+/plugin marketplace add maliquem/PainelFila
+/plugin install painel-fila@painel-fila-local
+```
+
+A fila (`fila/fila-build.ps1`) é copiada à mão para `~/.claude/scripts/`.
+
+De uma cópia local:
+
 ```powershell
 claude plugin marketplace add K:\src\PainelFila
 ```
