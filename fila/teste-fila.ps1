@@ -125,7 +125,7 @@ try {
     Iniciar S 1 -Sozinho; Iniciar N 1
     Start-Sleep -Milliseconds 1000
     Ok ((Ficha S).estado -eq 'espera' -and (Ficha N).estado -eq 'espera') 'S e N esperam (N atrás de S, mesmo com vaga livre)'
-    Ok (@((Ficha S).seguras).Count -eq 1) 'S segura a vaga livre'
+    Ok (@((Ficha S).seguras | Where-Object { $_ -ne 'sozinho' }).Count -eq 1) 'S segura a vaga livre'
     EsperarFim J, S, N
     Ok ((T (Hist S).comeco) -ge (T (Hist J).fim).AddSeconds(-0.5)) 'S esperou J acabar'
     Ok ((T (Hist N).comeco) -ge (T (Hist S).fim).AddSeconds(-0.5)) 'N esperou S acabar'
@@ -175,6 +175,46 @@ try {
     Ok ((Hist P5).tipo -eq 'Outro') "sem pista -> Outro ($((Hist P5).tipo))"
     Ok (@($muitos | Where-Object { Hist $_ }).Count -eq 6) 'os seis simultâneos rodaram e foram para o histórico'
     Ok (@(Get-ChildItem $fichas).Count -eq 0) 'nenhuma ficha sobrou'
+
+    Write-Host '10. dois -Sozinho com o segundo no topo não travam'
+    Iniciar J2 2
+    Ok (Esperar { (Ficha J2).estado -eq 'rodando' }) 'J2 rodando'
+    Iniciar S1 0.5 -Sozinho; Iniciar S2 0.5 -Sozinho
+    Ok (Esperar { @((Ficha S1).seguras) -contains 'sozinho' }) 'S1 segura a pasta sozinho'
+    Ok (Esperar { (Ficha S2).estado -eq 'espera' }) 'S2 na fila'
+    Ok ((Ctl -Mover (Ficha S2).id topo) -eq 0) 'S2 para o topo'
+    EsperarFim J2, S1, S2 30
+    Ok ((T (Hist S2).comeco) -ge (T (Hist S1).fim).AddSeconds(-0.5)) 'S1 (que já segurava) rodou antes de S2'
+
+    Write-Host '11. comando que não existe'
+    $p = Start-Process pwsh -ArgumentList '-NoProfile', '-File', $fila, '-Nome', 'X', 'comando-que-nao-existe-xyz' -RedirectStandardOutput (Join-Path $raiz 'X.out') -NoNewWindow -PassThru
+    $null = $p.Handle; $p.WaitForExit()
+    Ok ($p.ExitCode -ne 0) "sai com código não zero ($($p.ExitCode))"
+    Ok ($null -eq (Hist X)) 'não vai para o histórico'
+
+    Write-Host '12. matar comando que roda dentro do próprio pwsh (.ps1 direto)'
+    $out = Join-Path $raiz 'K.out'
+    $p = Start-Process pwsh -ArgumentList '-NoProfile', '-File', $fila, '-Nome', 'K', $trab, '30', '0', 'K' -RedirectStandardOutput $out -NoNewWindow -PassThru
+    $null = $p.Handle; $jobs['K'] = [pscustomobject]@{ nome = 'K'; proc = $p; out = $out }
+    Ok (Esperar { (Ficha K).estado -eq 'rodando' }) 'K rodando'
+    Ok ((Ficha K).emProcesso) 'K marcado como dentro do pwsh'
+    $t = Get-Date
+    Ok ((Ctl -Cancelar (Ficha K).id) -eq 0) 'matar K'
+    EsperarFim K 15
+    Ok (((Get-Date) - $t).TotalSeconds -lt 10) 'K morreu logo'
+    Ok ($p.ExitCode -ne 0) "K saiu com código não zero ($($p.ExitCode))"
+    Iniciar Z 0.3
+    EsperarFim Z 10
+    Ok ($null -ne (Hist Z)) 'vaga de K (morto) foi liberada'
+
+    Write-Host '13. vaga com pid reaproveitado (início diferente) é quebrada'
+    foreach ($v in 'lock', 'lock2') {
+        New-Item -ItemType Directory -Force (Join-Path $env:FILA_BUILD_DIR $v) | Out-Null
+        "$PID|reuso|$(Get-Date -Format o)|id-velho|1" | Set-Content (Join-Path $env:FILA_BUILD_DIR "$v\dono.txt")
+    }
+    Iniciar R 0.3
+    EsperarFim R 10
+    Ok ($null -ne (Hist R)) 'R rodou: as vagas do pid reaproveitado foram quebradas'
 
     Write-Host '9. invariantes'
     Ok ($maxVagas -le 2) "nunca mais de duas vagas em uso (máximo visto: $maxVagas)"

@@ -9,6 +9,9 @@ const h = (o: Partial<Hist>) => ({ tipo: 'Build', pasta: 'K:\\a', cancelado: fal
 test('ordem: primeiro ordem.txt, depois por chegada; rodando fica fora', async () => {
   const r = ordenarFila([f('3'), f('1'), f('2'), f('0', 'rodando'), f('4')], ['4', 'x', '2', '4'])
   expect(r.map(x => x.id)).toEqual(['4', '2', '1', '3'])
+  // quem já segura uma pasta (um -Sozinho com 'sozinho') fica na frente mesmo com outro no topo
+  const s1 = { ...f('5'), seguras: ['sozinho'] } as Ficha
+  expect(ordenarFila([f('6'), s1], ['6']).map(x => x.id)).toEqual(['5', '6'])
 })
 
 test('tipo deduzido igual ao script', async () => {

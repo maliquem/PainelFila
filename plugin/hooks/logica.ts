@@ -1,14 +1,17 @@
 // Contas puras do painel (sem $): testadas em tests/logica.test.ts.
 import type { Ficha, Hist, Tarefa } from '../types'
 
-// Mesma regra do fila-build.ps1: primeiro a ordem de ordem.txt, depois os outros por chegada (id).
+// Mesma regra do fila-build.ps1: quem já segura alguma pasta vai na frente; depois a ordem de ordem.txt
+// e os outros por chegada (id).
 export function ordenarFila(fichas: readonly Ficha[], ordem: readonly string[]): Ficha[] {
   const pos = new Map<string, number>()
   ordem.forEach((id, i) => {
     if (id && !pos.has(id)) pos.set(id, i)
   })
   const espera = fichas.filter(f => f.estado === 'espera')
+  const segura = (f: Ficha) => (f.seguras?.length ? 0 : 1)
   return espera.sort((a, b) => {
+    if (segura(a) !== segura(b)) return segura(a) - segura(b)
     const pa = pos.get(a.id) ?? Number.MAX_SAFE_INTEGER
     const pb = pos.get(b.id) ?? Number.MAX_SAFE_INTEGER
     return pa !== pb ? pa - pb : a.id < b.id ? -1 : a.id > b.id ? 1 : 0

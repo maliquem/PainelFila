@@ -13,6 +13,7 @@ export type Ficha = {
   vagas: number
   seguras: string[]
   log: string
+  emProcesso?: boolean
 }
 
 // Uma linha de historico.jsonl.

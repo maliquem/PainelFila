@@ -209,8 +209,9 @@ export const register: Register = on => {
     $.clock.every(2000, () => {
       void (async () => {
         await avisar($).catch(() => undefined)
-        if (await painelAberto($).catch(() => false)) await atualizar($)
-        // a cada ~30 s alguém limpa fichas e sessões de donos mortos
+        if (!(await painelAberto($).catch(() => false))) return
+        await atualizar($)
+        // a cada ~30 s, com o painel aberto, limpa fichas e sessões de donos mortos
         if (++volta % 15 === 0) {
           await $.process.run(['pwsh', '-NoProfile', '-File', await script($), '-Limpar']).catch(() => undefined)
         }

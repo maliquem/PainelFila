@@ -46,6 +46,7 @@ function Com-Trava([scriptblock]$sb) {
     $tem = $false
     try {
         try { $tem = $m.WaitOne(15000) } catch [Threading.AbandonedMutexException] { $tem = $true }
+        if (-not $tem) { throw 'fila-build: a trava da fila não soltou em 15 s' }
         & $sb
     } finally {
         if ($tem) { $m.ReleaseMutex() }
@@ -87,23 +88,34 @@ function Ler-Fichas {
     , $lista.ToArray()
 }
 
-# Fila de espera na ordem: primeiro os ids de ordem.txt, na ordem dele; depois os outros, por chegada (id).
+# Fila de espera na ordem: primeiro quem já segura alguma pasta (senão um -Sozinho com 'sozinho' e outro
+# movido para o topo se travam), depois os ids de ordem.txt, na ordem dele, e os outros, por chegada (id).
 function Ordem-Espera($lista) {
     $ord = @(Get-Content -LiteralPath (Join-Path $dir 'ordem.txt') -ErrorAction SilentlyContinue)
     $pos = @{}
     for ($k = 0; $k -lt $ord.Count; $k++) { if ($ord[$k] -and -not $pos.ContainsKey($ord[$k])) { $pos[$ord[$k]] = $k } }
     @($lista | Where-Object { $_.estado -eq 'espera' } |
-        Sort-Object -Stable @{ e = { if ($pos.ContainsKey($_.id)) { $pos[$_.id] } else { [int]::MaxValue } } }, @{ e = { $_.id } })
+        Sort-Object -Stable @{ e = { if (@($_.seguras).Count) { 0 } else { 1 } } }, @{ e = { if ($pos.ContainsKey($_.id)) { $pos[$_.id] } else { [int]::MaxValue } } }, @{ e = { $_.id } })
 }
 
-# Vaga livre? Quebra a de dono morto (pid na 1ª parte de dono.txt, como na versão antiga).
+# Vaga livre? Quebra a de dono morto. dono.txt = pid|nome|data[|id|início do processo]; a versão antiga
+# grava só os três primeiros. Sem dono.txt legível há mais de 1 min (criação pela metade) também é morta.
 function Vaga-Livre([string]$v) {
     $l = Join-Path $dir $v
     if (-not (Test-Path -LiteralPath $l)) { return $true }
-    $info = (Get-Content -LiteralPath (Join-Path $l 'dono.txt') -ErrorAction SilentlyContinue) -split '\|'
-    $parado = if ($info.Count -ge 3) { -not (Get-Process -Id ([int]$info[0]) -ErrorAction SilentlyContinue) }
+    $dono = Get-Content -Raw -LiteralPath (Join-Path $l 'dono.txt') -ErrorAction SilentlyContinue
+    $info = "$dono".Trim() -split '\|'
+    $parado = if ($info.Count -ge 3) { -not (Vivo $info[0] $(if ($info.Count -ge 5) { $info[4] })) }
               else { ((Get-Date) - (Get-Item -LiteralPath $l).CreationTime).TotalMinutes -gt 1 }
-    if ($parado) { Remove-Item -LiteralPath $l -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($parado) {
+        # Renomear é atômico: só um processo quebra a vaga, e confere que ainda é a mesma morta;
+        # se outro já a recriou nesse meio tempo, devolve.
+        $q = "$l.quebra.$PID"
+        try { [IO.Directory]::Move($l, $q) } catch { return $false }
+        $agora = Get-Content -Raw -LiteralPath (Join-Path $q 'dono.txt') -ErrorAction SilentlyContinue
+        if ("$agora" -ne "$dono") { try { [IO.Directory]::Move($q, $l) } catch {}; return $false }
+        Remove-Item -LiteralPath $q -Recurse -Force -ErrorAction SilentlyContinue
+    }
     -not (Test-Path -LiteralPath $l)
 }
 
@@ -111,7 +123,7 @@ function Pegar-Pasta([string]$v) {
     $l = Join-Path $dir $v
     if (-not (Vaga-Livre $v)) { return $false }
     try { New-Item -ItemType Directory -Path $l -ErrorAction Stop | Out-Null } catch { return $false }
-    "$PID|$Nome|$(Agora)|$id" | Set-Content -LiteralPath (Join-Path $l 'dono.txt')
+    "$PID|$Nome|$(Agora)|$id|$($ficha.inicioProc)" | Set-Content -LiteralPath (Join-Path $l 'dono.txt')
     $true
 }
 
@@ -169,13 +181,20 @@ switch ($argv[0]) {
         New-Item -ItemType File -Force (Join-Path $fichas "$alvo.cancelar") | Out-Null
         $o = Ler-Json $arq
         if ($o -and $o.estado -eq 'rodando') {
+            if (-not (Vivo $o.pid $o.inicioProc)) { "fila-build: '$alvo' já não está rodando"; exit 1 }
             # Mata a árvore do comando (filhos do script); o script segue, solta a vaga e grava o histórico.
-            for ($t = 0; $t -lt 30; $t++) {
+            # Só filhos nascidos depois do script: um pid antigo reaproveitado não é filho dele.
+            $nasceu = [DateTime]::new([long]$o.inicioProc, 'Utc')
+            $achou = $false
+            for ($t = 0; -not $o.emProcesso -and $t -lt 30; $t++) {
                 $filhos = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$([int]$o.pid)" -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Name -ne 'conhost.exe' })
-                if ($filhos.Count) { foreach ($c in $filhos) { & taskkill.exe /PID $c.ProcessId /T /F *> $null }; break }
+                    Where-Object { $_.Name -ne 'conhost.exe' -and $_.CreationDate.ToUniversalTime() -ge $nasceu })
+                if ($filhos.Count) { foreach ($c in $filhos) { & taskkill.exe /PID $c.ProcessId /T /F *> $null }; $achou = $true; break }
                 Start-Sleep -Milliseconds 100
             }
+            # Comando dentro do próprio pwsh (.ps1, função) ou sem filho para matar: mata o script inteiro.
+            # Ele sai com código 1; vagas e ficha de dono morto são limpas pelos outros.
+            if (-not $achou) { & taskkill.exe /PID ([int]$o.pid) /T /F *> $null }
             "matando: $alvo"
         } else { "cancelado: $alvo" }
         exit 0
@@ -198,6 +217,11 @@ if (-not $Nome -or $Cmd.Count -eq 0) {
     Write-Host 'uso: fila-build.ps1 -Nome <sessão> [-Sozinho] [-Tipo <tipo>] <comando> [args...]'
     exit 2
 }
+$qual = Get-Command $Cmd[0] -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $qual) {
+    Write-Host "fila-build: comando não encontrado: $($Cmd[0])"
+    exit 1
+}
 $textoCmd = ($Cmd | ForEach-Object { if ("$_" -match '\s') { "`"$_`"" } else { "$_" } }) -join ' '
 if (-not $Tipo) { $Tipo = Tipo-Do-Comando $textoCmd $Sozinho }
 $quero = if ($Sozinho) { $Vagas.Count } else { 1 }
@@ -209,6 +233,7 @@ $ficha = [ordered]@{
     id = $id; pid = $PID; inicioProc = (Inicio-Proc $PID); nome = $Nome; sessao = "$env:CLAUDE_CODE_SESSION_ID"
     tipo = $Tipo; cmd = $textoCmd; pasta = (Get-Location).Path; criado = (Agora); estado = 'espera'
     comeco = $null; vagas = $quero; seguras = @(); log = $log
+    emProcesso = $qual.CommandType -ne 'Application'   # .ps1/função: Matar tem de matar o script
 }
 function Gravar-Ficha { Gravar-Atomico $arqFicha ($ficha | ConvertTo-Json -Compress) }
 
@@ -228,17 +253,19 @@ try {
             $saldo = @($Vagas | Where-Object { $minhas -notcontains $_ -and (Vaga-Livre $_) }).Count
             foreach ($o in $fila) {
                 if ($o.id -eq $id) { break }
-                $saldo -= [Math]::Max(0, [int]$o.vagas - @($o.seguras).Count)
+                $saldo -= [Math]::Max(0, [int]$o.vagas - @($o.seguras | Where-Object { $_ -ne 'sozinho' }).Count)
             }
             if ($saldo -ge 1) {
                 # -Sozinho pega antes a pasta 'sozinho' (só um por vez, também contra a versão antiga),
                 # senão dois -Sozinho ficariam com uma vaga cada esperando o outro.
-                if ($Sozinho -and $minhas -notcontains 'sozinho') { if (Pegar-Pasta 'sozinho') { $minhas.Add('sozinho') } }
+                if ($Sozinho -and $minhas -notcontains 'sozinho') {
+                    if (Pegar-Pasta 'sozinho') { $minhas.Add('sozinho'); $ficha.seguras = @($minhas); Gravar-Ficha }
+                }
                 if (-not $Sozinho -or $minhas -contains 'sozinho') {
                     foreach ($v in $Vagas) {
                         if ($minhas -notcontains $v -and (Pegar-Pasta $v)) {
                             $minhas.Add($v)
-                            $ficha.seguras = @($minhas | Where-Object { $_ -ne 'sozinho' })
+                            $ficha.seguras = @($minhas)
                             Gravar-Ficha
                             break
                         }
@@ -277,7 +304,9 @@ try {
         # A saída vai para a sessão como antes e também para o log; stderr vira texto.
         # O pwsh lê a saída do comando pela página de código do console (ibm850 aqui): para a sessão os
         # bytes voltam iguais; no log, bytes que são UTF-8 válido (cargo) são lidos como UTF-8.
-        & $Cmd[0] @($Cmd | Select-Object -Skip 1) 2>&1 | ForEach-Object {
+        # @resto (variável) espalha os argumentos; @(...) passaria um array só a um .ps1 ou função.
+        $resto = @($Cmd | Select-Object -Skip 1)
+        & $Cmd[0] @resto 2>&1 | ForEach-Object {
             $s = if ($_ -is [System.Management.Automation.ErrorRecord]) { "$_" } else { $_ }
             $linha = "$s"
             try { $linha = $utf8Estrito.GetString($enc.GetBytes($linha)) } catch {}
@@ -285,6 +314,9 @@ try {
             $s
         }
         $codigo = $LASTEXITCODE
+    } catch {
+        Write-Host "fila-build: o comando parou com erro: $_"
+        $codigo = 1
     } finally {
         $w.Dispose()
         $morto = Test-Path -LiteralPath $arqCancelar
@@ -294,6 +326,8 @@ try {
             comeco = $ficha.comeco; fim = $fim.ToString('o'); segundos = [Math]::Round(($fim - $t0).TotalSeconds, 1)
             codigo = $(if ($null -eq $codigo) { if ($morto) { -1 } else { 0 } } else { $codigo }); cancelado = $morto; log = $log
         }
+        # A ficha sai antes das vagas: senão, por um instante, ela ainda diz 'rodando' ao lado de quem entrou.
+        Remove-Item -LiteralPath $arqFicha -Force -ErrorAction SilentlyContinue
         Soltar-Vagas
         try {
             Com-Trava {
