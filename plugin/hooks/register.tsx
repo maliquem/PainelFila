@@ -1,7 +1,7 @@
 // Painel /fila: mostra a fila do fila-build.ps1 e as tarefas de fundo de todas as sessões.
 // Cada sessão publica as próprias tarefas em <pasta>\sessoes\<id>.json; o painel lê a pasta a cada 2 s.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Ficha, Foto, Hist, Sessao, Tarefa, Velha } from '../types'
 import {
@@ -201,6 +201,16 @@ e: { session_id: string; cwd: string; transcript_path: string; background_tasks?
   await publicar($, e.session_id, e.cwd)
 }
 
+// Uma cor por tipo, das cores do tema, para achar o item de olho.
+function corDoTipo(tipo: string): 'suggestion' | 'success' | 'claude' | 'warning' | 'merged' | undefined {
+  if (tipo === 'Build') return 'suggestion'
+  if (tipo === 'Teste') return 'success'
+  if (tipo === 'Jogo') return 'claude'
+  if (tipo === 'Medição') return 'warning'
+  if (tipo.startsWith('Subagente')) return 'merged'
+  return undefined
+}
+
 const ATIVAS = /^(running|pending|in_progress|starting|working)$/i
 
 export const register: Register = on => {
@@ -271,50 +281,105 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Progress } = $.ui.resolve(e)
     const f = await read($, foto)
     const msg = await read($, aviso)
     const largura = Math.max(30, (e.props.bodyColumns ?? 80) - 30)
     if (!f) return <Text dimColor>Lendo a fila…</Text>
 
-    const est = (tipo: string, pasta: string) => {
-      const s = estimativa(f.historico, tipo, pasta)
-      return s === undefined ? '' : ` · est. ${dur(s)}`
-    }
     const outras = f.sessoes.flatMap(s =>
       s.tarefas.filter(t => !ehDaFila(t)).map(t => ({ s, t })),
     )
     const verLog = (id: string) => update($, logDe, v => (v === id ? '' : id)).then(() => atualizar($))
+    const nRodando = f.rodando.length + f.velhas.length
+    const resumo = `${nRodando} rodando · ${f.fila.length} na fila${f.pausada ? ' · pausada' : ''}`
+
+    // Minimizado no app desktop: só o resumo e o que roda agora.
+    if (e.props.placement === 'widget') {
+      const r = f.rodando[0]
+      return (
+        <Box flexDirection="column">
+          <Text bold color={f.pausada ? 'warning' : undefined}>{resumo}</Text>
+          {r && (
+            <Text>
+              <Text color={corDoTipo(r.tipo)}>{r.tipo}</Text> {r.nome} <Text dimColor>há {dur(desde(r.comeco, f.agora))}</Text>
+            </Text>
+          )}
+        </Box>
+      )
+    }
+
+    const secao = (titulo: string, n: number) => (
+      <Text>
+        <Text bold>{titulo}</Text>
+        <Text dimColor> · {n}</Text>
+      </Text>
+    )
+    // Uma linha de título (tipo, sessão | tempos) e uma do comando com os botões à direita.
+    const cartao = (
+      key: string,
+      cabeca: string,
+      tipo: string,
+      nome: string,
+      tempos: string,
+      cmd: string,
+      botoes: RenderChildren,
+      barra?: RenderChildren,
+    ) => (
+      <Box key={key} flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
+        <Box flexDirection="row" justifyContent="space-between" gap={2}>
+          <Text>
+            {cabeca}
+            <Text bold color={corDoTipo(tipo)}>{tipo}</Text>
+            <Text bold>  {nome}</Text>
+          </Text>
+          <Text dimColor>{tempos}</Text>
+        </Box>
+        {barra}
+        <Box flexDirection="row" justifyContent="space-between" gap={2}>
+          <Text dimColor>{curto(cmd, largura)}</Text>
+          <Box flexDirection="row" gap={1} flexShrink={0}>
+            {botoes}
+          </Box>
+        </Box>
+      </Box>
+    )
 
     return (
       <Box flexDirection="column" gap={1}>
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
-          <Text bold>
-            {f.rodando.length + f.velhas.length} rodando · {f.fila.length} na fila
-            {f.pausada ? ' · PAUSADA' : ''}
-          </Text>
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
+          <Text bold color={f.pausada ? 'warning' : undefined}>{resumo}</Text>
           <Button key="pausa" variant={f.pausada ? 'primary' : 'secondary'} onPress={() => controlar($, [f.pausada ? '-Soltar' : '-Pausar'])}>
             {f.pausada ? 'Soltar fila' : 'Pausar fila'}
           </Button>
         </Box>
-        {f.pausada && <Text color="yellow">Fila pausada: nada novo começa até soltar.</Text>}
-        {msg !== '' && <Text color="red">{msg}</Text>}
-        {f.erro && <Text color="red">Erro ao ler a pasta: {f.erro}</Text>}
+        {f.pausada && <Text color="warning">Fila pausada: nada novo começa até soltar.</Text>}
+        {msg !== '' && <Text color="error">{msg}</Text>}
+        {f.erro && <Text color="error">Erro ao ler a pasta: {f.erro}</Text>}
 
         <Box flexDirection="column">
-          <Text bold>Rodando</Text>
-          {f.rodando.length + f.velhas.length === 0 && <Text dimColor>nada</Text>}
-          {f.rodando.map(r => (
-            <Box key={`r-${r.id}`} flexDirection="row" gap={1} flexWrap="wrap">
-              <Text>
-                <Text bold>{r.tipo}</Text> · {r.nome} · {curto(r.cmd, largura)} · há {dur(desde(r.comeco, f.agora))}
-                {est(r.tipo, r.pasta)}
-                {r.vagas > 1 ? ' · 2 vagas' : ''}
-              </Text>
-              <Button key={`m-${r.id}`} onPress={() => controlar($, ['-Cancelar', r.id])}>Matar</Button>
-              <Button key={`l-${r.id}`} onPress={() => verLog(r.id)}>Log</Button>
-            </Box>
-          ))}
+          {secao('Rodando', nRodando)}
+          {nRodando === 0 && <Text dimColor>nada rodando</Text>}
+          {f.rodando.map(r => {
+            const passou = desde(r.comeco, f.agora)
+            const prev = estimativa(f.historico, r.tipo, r.pasta)
+            const tempos = `há ${dur(passou)}${prev === undefined ? '' : ` · est. ${dur(prev)}`}${r.vagas > 1 ? ' · 2 vagas' : ''}`
+            return cartao(
+              `r-${r.id}`,
+              '',
+              r.tipo,
+              r.nome,
+              tempos,
+              r.cmd,
+              <>
+                <Button key={`l-${r.id}`} onPress={() => verLog(r.id)}>Log</Button>
+                <Button key={`m-${r.id}`} onPress={() => controlar($, ['-Cancelar', r.id])}>Matar</Button>
+              </>,
+              prev === undefined ? undefined : (
+                <Progress label={`${r.tipo} ${r.nome}`} value={Math.min(passou, prev)} max={prev} valueText={`${dur(passou)} de ~${dur(prev)}`} />
+              ),
+            )
+          })}
           {f.velhas.map(v => (
             <Text dimColor>
               {v.vaga} · {v.nome} · versão antiga do script{v.desde ? ` · desde ${v.desde}` : ''}
@@ -323,45 +388,51 @@ export const register: Register = on => {
         </Box>
 
         <Box flexDirection="column">
-          <Text bold>Na fila</Text>
-          {f.fila.length === 0 && <Text dimColor>vazia</Text>}
-          {f.fila.map((q, i) => (
-            <Box key={`q-${q.id}`} flexDirection="row" gap={1} flexWrap="wrap">
-              <Text>
-                #{i + 1} <Text bold>{q.tipo}</Text> · {q.nome} · {curto(q.cmd, largura)} · espera há{' '}
-                {dur(desde(q.criado, f.agora))}
-                {est(q.tipo, q.pasta)}
-              </Text>
-              <Button key={`c-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'cima'])}>↑</Button>
-              <Button key={`b-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'baixo'])}>↓</Button>
-              <Button key={`t-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'topo'])}>Topo</Button>
-              <Button key={`x-${q.id}`} onPress={() => controlar($, ['-Cancelar', q.id])}>Cancelar</Button>
-            </Box>
-          ))}
+          {secao('Na fila', f.fila.length)}
+          {f.fila.length === 0 && <Text dimColor>fila vazia</Text>}
+          {f.fila.map((q, i) => {
+            const prev = estimativa(f.historico, q.tipo, q.pasta)
+            return cartao(
+              `q-${q.id}`,
+              `#${i + 1}  `,
+              q.tipo,
+              q.nome,
+              `espera há ${dur(desde(q.criado, f.agora))}${prev === undefined ? '' : ` · est. ${dur(prev)}`}`,
+              q.cmd,
+              <>
+                <Button key={`c-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'cima'])}>↑</Button>
+                <Button key={`b-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'baixo'])}>↓</Button>
+                <Button key={`t-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'topo'])}>Topo</Button>
+                <Button key={`x-${q.id}`} onPress={() => controlar($, ['-Cancelar', q.id])}>Cancelar</Button>
+              </>,
+            )
+          })}
         </Box>
 
         <Box flexDirection="column">
-          <Text bold>Outras tarefas de fundo</Text>
+          {secao('Outras tarefas de fundo', outras.length)}
           {outras.length === 0 && <Text dimColor>nenhuma</Text>}
           {outras.map(({ s, t }) => (
-            <Text>
-              <Text bold>{tipoDaTarefa(t)}</Text> · {s.nome} · {curto(t.command ?? t.description, largura)}
-              {t.desde ? ` · há ${dur((f.agora - t.desde) / 1000)}` : ''}
-            </Text>
+            <Box key={`o-${s.sessao}-${t.id}`} flexDirection="row" justifyContent="space-between" gap={2}>
+              <Text>
+                <Text bold color={corDoTipo(tipoDaTarefa(t))}>{tipoDaTarefa(t)}</Text>
+                <Text>  {s.nome}  </Text>
+                <Text dimColor>{curto(t.command ?? t.description, largura)}</Text>
+              </Text>
+              <Text dimColor>{t.desde ? `há ${dur((f.agora - t.desde) / 1000)}` : ''}</Text>
+            </Box>
           ))}
         </Box>
 
         {f.log && (
-          <Box flexDirection="column">
-            <Box flexDirection="row" gap={1}>
+          <Box flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
+            <Box flexDirection="row" justifyContent="space-between" gap={1}>
               <Text bold>Log: {f.log.titulo}</Text>
               <Button key="fechar-log" onPress={() => verLog(f.log?.id ?? '')}>Fechar log</Button>
             </Box>
             {f.log.linhas.length === 0 && <Text dimColor>(vazio)</Text>}
-            {f.log.linhas.map((l, i) => (
-              <Text dimColor>
-                {l}
-              </Text>
+            {f.log.linhas.map(l => (
+              <Text dimColor>{l}</Text>
             ))}
           </Box>
         )}

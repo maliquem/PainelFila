@@ -114,7 +114,8 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as outras tarefas;
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect((await ui.find({ type: 'Text', text: /1 rodando · 2 na fila/ }))?.text).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /alfa/ }))?.text).toMatch(/há 30s · est\. 2m30s/)
+    expect((await ui.find({ type: 'Text', text: /Build\s+alfa/ }))?.text).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: /^há 3\ds · est\. 2m30s$/ }))?.text).toBeDefined()
     expect((await ui.find({ type: 'Text', text: /#1 / }))?.text).toMatch(/gama/)
     expect((await ui.find({ type: 'Text', text: /#2 / }))?.text).toMatch(/beta/)
     expect((await ui.find({ type: 'Text', text: /Subagente \(Explore\)/ }))?.text).toMatch(/Sessão Dois/)
@@ -123,6 +124,13 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as outras tarefas;
     expect(await ui.find({ type: 'Text', text: /não deve aparecer/ })).toBeUndefined()
     await ui.unmount()
   }
+
+  // Minimizado (widget): só o resumo e o que roda.
+  const mini = await $.ui.mount({ ...PANE, props: { ...PANE.props, placement: 'widget' }, surface: 'desktop' })
+  expect((await mini.find({ type: 'Text', text: /1 rodando · 2 na fila/ }))?.text).toBeDefined()
+  expect((await mini.find({ type: 'Text', text: /alfa/ }))?.text).toMatch(/há 3\ds/)
+  expect(await mini.find({ type: 'Text', text: /gama/ })).toBeUndefined()
+  await mini.unmount()
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'c-2-b' })
