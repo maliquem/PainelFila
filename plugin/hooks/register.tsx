@@ -211,12 +211,18 @@ export const register: Register = on => {
         await avisar($).catch(() => undefined)
         if (!(await painelAberto($).catch(() => false))) return
         await atualizar($)
-        // a cada ~30 s, com o painel aberto, limpa fichas e sessões de donos mortos
+        // a cada ~30 s limpa fichas e sessões de donos mortos; a marca 'limpeza' faz só uma sessão rodar por vez
         if (++volta % 15 === 0) {
+          const marca = juntar(await pastaDados($), 'limpeza')
+          const ultima = await $.fs.stat(marca).then(s => s.mtimeMs).catch(() => 0)
+          if (Date.now() - ultima < 25000) return
+          await $.fs.write(marca, '').catch(() => undefined)
           await $.process.run(['pwsh', '-NoProfile', '-File', await script($), '-Limpar']).catch(() => undefined)
         }
       })()
     })
+    // O painel abre sozinho em toda sessão com pessoa (não em `claude -p`).
+    if (e.isInteractive) await $.ui.open({ id: PANE, title: 'Fila' }).catch(() => undefined)
     return next(e)
   })
 

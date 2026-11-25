@@ -23,14 +23,14 @@ Teste: `pwsh -NoProfile -File fila/teste-fila.ps1` (usa uma pasta temporária, n
 
 ## Painel
 
-Digite `/fila` em qualquer sessão. Ele mostra:
+O painel abre sozinho no começo de toda sessão. Se for fechado, `/fila` abre de novo. Ele mostra:
 
 - **Rodando**: tipo, sessão, comando, há quanto tempo e o tempo estimado (média das últimas 5 do mesmo tipo e pasta). Tem os botões Matar e Log.
 - **Na fila**: a posição, com os botões ↑, ↓, Topo e Cancelar.
 - **Outras tarefas de fundo**: comandos em segundo plano, subagentes e monitores de todas as sessões abertas.
 - **Pausar fila / Soltar fila**: enquanto pausada, nenhum pedido novo começa.
 
-Quando algo da fila termina, aparece um aviso com o código de saída. O aviso sai na sessão dona do pedido e em toda sessão que estiver com o painel aberto.
+Quando algo da fila termina, aparece um aviso com o código de saída. O aviso sai na sessão dona do pedido e em toda sessão que estiver com o painel aberto (por padrão, todas).
 
 Testes do mod: `claude plugin validate plugin` e `claude plugin test plugin`.
 
