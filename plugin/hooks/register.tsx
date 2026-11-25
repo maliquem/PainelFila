@@ -466,7 +466,7 @@ export const register: Register = on => {
     // A descrição aparece ao passar o mouse: um Box com key é o escopo do hover, e o cartão escondido
     // (absolute, fora do fluxo) aparece por cima sem mexer no resto.
     const dica = (key: string, texto: string, alvo: RenderChildren, lado: 'left' | 'right' = 'right') => (
-      <Box key={key} flexShrink={lado === 'right' ? 0 : 1} minWidth={3} justifyContent="center">
+      <Box key={key} flexShrink={lado === 'right' ? 0 : 1} minWidth={lado === 'right' ? 3 : 0} justifyContent="center">
         {alvo}
         <Box position="absolute" top={1} {...{ [lado]: 0 }} display="none" hover={{ display: 'flex' }} backgroundColor="text" paddingX={1}>
           <Text color="inverseText" wrap="truncate-end">{texto}</Text>
@@ -627,7 +627,7 @@ export const register: Register = on => {
           'Na fila',
           'suggestion',
           f.fila.length > 0 && !f.pausada,
-          f.pausada ? `pausada · ${f.fila.length}` : f.fila.length > 0 ? `${f.fila.length} na fila` : '○ vazia',
+          f.pausada ? ['pausada', f.fila.length].filter(Boolean).join(' · ') : f.fila.length > 0 ? `${f.fila.length} na fila` : '○ vazia',
           f.fila.map((q, i) =>
             item(
               `q-${q.id}`,
@@ -659,7 +659,7 @@ export const register: Register = on => {
             return (
               <Box key={`s-${s.sessao}`} flexDirection="column" paddingLeft={nivel * 2}>
                 <Box flexDirection="row" justifyContent="space-between" gap={1}>
-                  <Box flexDirection="row" gap={1} flexShrink={1}>
+                  <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
                     {nivel > 0 && <Text dimColor>•</Text>}
                     {nomeDaSessao(s)}
                     {modelo !== '' && <Text color="merged" wrap="truncate-end">({modelo})</Text>}
@@ -667,9 +667,12 @@ export const register: Register = on => {
                   </Box>
                   {estado(s)}
                 </Box>
-                {(s.subagentes ?? []).map(a =>
-                  filha(`a-${s.sessao}-${a.id}`, nomeDoModelo(a.modelo) || a.tipo, 'merged', `(${a.descricao})`, '[Subagente]'),
-                )}
+                {(s.subagentes ?? []).map(a => {
+                  // Sem modelo conhecido, o tipo (que não cabe na coluna) abre a descrição.
+                  const m = nomeDoModelo(a.modelo)
+                  const descricao = m ? `(${a.descricao})` : `${a.tipo} (${a.descricao})`
+                  return filha(`a-${s.sessao}-${a.id}`, m || 'Agente', 'merged', descricao, '[Subagente]')
+                })}
                 {tarefasDaSessao(s).map(t => {
                   // "Subagente (Explore)": o tipo fica na coluna e o resto abre a descrição.
                   const [tipo = '', ...extra] = tipoDaTarefa(t).split(' ')
