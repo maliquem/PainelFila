@@ -1,19 +1,22 @@
-// Painel /fila: mostra a fila do fila-build.ps1 e as tarefas de fundo de todas as sessões.
-// Cada sessão publica as próprias tarefas em <pasta>\sessoes\<id>.json; o painel lê a pasta a cada 2 s.
+// Painel /fila: mostra a fila do fila-build.ps1 e as sessões ativas, com subagentes e tarefas de fundo.
+// Cada sessão publica o próprio estado em <pasta>\sessoes\<id>.json; o painel lê a pasta a cada 2 s.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Ficha, Foto, Hist, Sessao, Tarefa, Velha } from '../types'
+import type { Ficha, Foto, Hist, Sessao, Sub, Tarefa, Velha } from '../types'
 import {
+  arvoreDeSessoes,
+  barra,
   curto,
   desde,
   dur,
-  ehDaFila,
   estimativa,
   fimMaisNovo,
   lerHistorico,
+  nomeDoModelo,
   novosNoHistorico,
   ordenarFila,
+  tarefasDaSessao,
   textoDoAviso,
   tipoDaTarefa,
   tituloDaTranscricao,
@@ -27,6 +30,10 @@ const ultimoFim = atom({ plugin: 'painel-fila', key: 'ultimoFim' } as const, '')
 const minhas = atom({ plugin: 'painel-fila', key: 'minhas' } as const, [])
 const nomeSessao = atom({ plugin: 'painel-fila', key: 'nomeSessao' } as const, '')
 const aviso = atom({ plugin: 'painel-fila', key: 'aviso' } as const, '')
+const eu = atom({ plugin: 'painel-fila', key: 'eu' } as const, null)
+const trabalhando = atom({ plugin: 'painel-fila', key: 'trabalhando' } as const, false)
+const esperando = atom({ plugin: 'painel-fila', key: 'esperando' } as const, false)
+const subagentes = atom({ plugin: 'painel-fila', key: 'subagentes' } as const, [])
 
 type Api = EngineInterface
 
@@ -166,16 +173,84 @@ async function avisar($: Api): Promise<void> {
 
 async function publicar($: Api, sessao: string, pasta: string, encerrada = false): Promise<void> {
   const env = await $.process.hookEnv()
+  const quem = await read($, eu)
+  // Subagente cujo fim o mod não ouviu (recarregado no meio) sai quando o engine já não o tem rodando.
+  const vivos = await $.agent
+    .list()
+    .then(l => new Set(l.filter(a => a.taskStatus === 'running' || a.taskStatus === 'pending').map(a => a.id)))
+    .catch(() => undefined)
+  if (vivos) await update($, subagentes, l => (l.every(a => vivos.has(a.id)) ? l : l.filter(a => vivos.has(a.id))))
   const dados: Sessao = {
     sessao,
-    nome: (await read($, nomeSessao)) || pasta.split(/[\\/]/).filter(Boolean).at(-1) || sessao,
+    nome: quem?.titulo || (await read($, nomeSessao)) || pasta.split(/[\\/]/).filter(Boolean).at(-1) || sessao,
     pasta,
     pid: Number(env.CLAUDE_PID ?? 0),
     atualizado: Date.now(),
     encerrada: encerrada || undefined,
     tarefas: encerrada ? [] : await read($, minhas),
+    ccd: quem?.ccd || undefined,
+    ccdPai: quem?.ccdPai,
+    modelo: quem?.modelo || undefined,
+    esforco: quem?.esforco,
+    trabalhando: !encerrada && (await read($, trabalhando)),
+    esperando: !encerrada && (await read($, esperando)),
+    subagentes: encerrada ? [] : await read($, subagentes),
   }
   await $.fs.write(juntar(juntar(await pastaDados($), 'sessoes'), `${sessao}.json`), JSON.stringify(dados))
+}
+
+async function publicarAqui($: Api): Promise<void> {
+  await publicar($, await $.session.id(), await $.session.cwd()).catch(() => undefined)
+}
+
+// Quem é esta sessão no app desktop: id local_…, mãe, título, modelo e esforço. Fora do app (sem
+// ccd_session_mgmt) fica só o modelo da própria sessão. Devolve true se algo mudou.
+async function quemSouEu($: Api): Promise<boolean> {
+  const antes = await read($, eu)
+  let novo = antes
+  try {
+    const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' })
+    const bloco = r.content.find(c => c.type === 'text') as { text?: string } | undefined
+    const j = JSON.parse(bloco?.text ?? '') as {
+      sessionId?: string
+      parentSessionId?: string
+      detached?: boolean
+      title?: string
+      model?: string
+      effort?: string
+    }
+    if (r.isError || !j.sessionId) throw new Error('sem sessionId')
+    novo = {
+      ccd: j.sessionId,
+      ccdPai: j.detached ? undefined : j.parentSessionId,
+      titulo: j.title ?? '',
+      modelo: j.model ?? '',
+      esforco: j.effort,
+    }
+  } catch {
+    const modelo = await $.session.model().catch(() => '')
+    novo = { ccd: antes?.ccd ?? '', ccdPai: antes?.ccdPai, titulo: antes?.titulo ?? '', modelo, esforco: antes?.esforco }
+  }
+  if (JSON.stringify(novo) === JSON.stringify(antes)) return false
+  await update($, eu, () => novo)
+  return true
+}
+
+// Notificação nativa só desta sessão (cada sessão avisa por si, sem repetir entre elas).
+async function notificar($: Api, texto: string, chave: string): Promise<void> {
+  const titulo = (await read($, eu))?.titulo || (await read($, nomeSessao)) || 'Claude'
+  await $.ui.notify(texto, { title: titulo, key: `${chave}-${await $.session.id()}` }).catch(() => undefined)
+}
+
+// Pedido de permissão ou pergunta: a sessão fica "esperando" e avisa. Os sinais do mesmo pedido
+// (PermissionRequest e Notification) chegam juntos: avisa uma vez só.
+let ultimoPedido = 0
+async function precisaDela($: Api, texto: string): Promise<void> {
+  await update($, esperando, () => true)
+  await publicarAqui($)
+  if (Date.now() - ultimoPedido < 5000) return
+  ultimoPedido = Date.now()
+  await notificar($, texto, 'pedido')
 }
 
 async function aoParar(
@@ -217,8 +292,11 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'fila', description: 'Abre o painel da fila de builds e das tarefas de fundo' })
     let volta = 0
+    let tique = 0
     $.clock.every(2000, () => {
       void (async () => {
+        // Logo no começo e a cada ~1 min confere título, modelo e mãe; publica se mudou.
+        if (tique++ % 30 === 0 && (await quemSouEu($).catch(() => false))) await publicarAqui($)
         await avisar($).catch(() => undefined)
         if (!(await painelAberto($).catch(() => false))) return
         await atualizar($)
@@ -246,6 +324,54 @@ export const register: Register = on => {
 
   on('classic.Stop', async ($, e, next) => {
     await aoParar($, e).catch(() => undefined)
+    const ultima = curto(e.last_assistant_message ?? '', 120)
+    await notificar($, ultima ? `Terminou: ${ultima}` : 'Terminou o turno', 'fim')
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined && !(await read($, trabalhando))) {
+      await update($, trabalhando, () => true)
+      await publicarAqui($)
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      await update($, trabalhando, () => false)
+      await update($, esperando, () => false)
+    } else {
+      await update($, subagentes, l => l.filter(a => a.id !== e.agentId))
+    }
+    await publicarAqui($)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('agent.spawn', async ($, e, next) => {
+    const r = await next(e)
+    if (r.agentId) {
+      const a: Sub = {
+        id: r.agentId,
+        modelo: r.model || e.model || e.parentModel,
+        descricao: e.description,
+        tipo: e.subagentType,
+        desde: Date.now(),
+      }
+      await update($, subagentes, l => [...l.filter(x => x.id !== a.id), a])
+      await publicarAqui($)
+    }
+    return r
+  }).catch(($, e, next) => next(e))
+
+  on('classic.PermissionRequest', async ($, e, next) => {
+    await precisaDela($, `Pede permissão: ${e.tool_name}`).catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('classic.Notification', async ($, e, next) => {
+    // idle_prompt repete o aviso do fim do turno; plugin_notification é o aviso de um mod.
+    if (/permission|elicitation/i.test(e.notification_type)) await precisaDela($, e.message).catch(() => undefined)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -256,7 +382,12 @@ export const register: Register = on => {
 
   // Comando, subagente ou monitor que vai para o fundo aparece já, sem esperar o fim do turno.
   on('tool.call', async ($, e, next) => {
+    if (e.tool === 'AskUserQuestion') await precisaDela($, 'Tem uma pergunta para você').catch(() => undefined)
     const ran = await next(e)
+    if (await read($, esperando)) {
+      await update($, esperando, () => false)
+      await publicarAqui($)
+    }
     const r = ran.result as { backgroundTaskId?: string; taskId?: string } | undefined
     const id = r?.backgroundTaskId ?? (e.tool === 'Monitor' ? r?.taskId : undefined)
     if (id) {
@@ -270,7 +401,7 @@ export const register: Register = on => {
         desde: Date.now(),
       }
       await update($, minhas, l => [...l.filter(x => x.id !== id), t])
-      await publicar($, await $.session.id(), await $.session.cwd()).catch(() => undefined)
+      await publicarAqui($)
     }
     return ran
   }).catch(($, e, next) => next(e))
@@ -281,15 +412,13 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Progress } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     const f = await read($, foto)
     const msg = await read($, aviso)
-    const largura = Math.max(30, (e.props.bodyColumns ?? 80) - 30)
     if (!f) return <Text dimColor>Lendo a fila…</Text>
+    // No terminal não há mouse: os botões mostram a palavra em vez do ícone com dica.
+    const terminal = e.surface === 'terminal'
 
-    const outras = f.sessoes.flatMap(s =>
-      s.tarefas.filter(t => !ehDaFila(t)).map(t => ({ s, t })),
-    )
     const verLog = (id: string) => update($, logDe, v => (v === id ? '' : id)).then(() => atualizar($))
     const nRodando = f.rodando.length + f.velhas.length
     const resumo = `${nRodando} rodando · ${f.fila.length} na fila${f.pausada ? ' · pausada' : ''}`
@@ -309,46 +438,80 @@ export const register: Register = on => {
       )
     }
 
-    const secao = (titulo: string, n: number) => (
-      <Text>
-        <Text bold>{titulo}</Text>
-        <Text dimColor> · {n}</Text>
-      </Text>
+    // A descrição aparece ao passar o mouse: um Box com key é o escopo do hover, e o cartão escondido
+    // (absolute, fora do fluxo) aparece por cima sem mexer no resto.
+    const dica = (key: string, texto: string, alvo: RenderChildren) => (
+      <Box key={key} flexShrink={0}>
+        {alvo}
+        <Box position="absolute" top={1} right={0} display="none" hover={{ display: 'flex' }} backgroundColor="text" paddingX={1}>
+          <Text color="inverseText" wrap="truncate-end">{texto}</Text>
+        </Box>
+      </Box>
     )
-    // Uma linha de título (tipo, sessão | tempos) e uma do comando com os botões à direita.
+    const botao = (key: string, icone: string, texto: string, acao: () => unknown) =>
+      terminal ? (
+        <Button key={key} plain onPress={acao}>{texto}</Button>
+      ) : (
+        dica(`d${key}`, texto, <Button key={key} plain onPress={acao}>{icone}</Button>)
+      )
+
+    const secao = (titulo: string, n: number) => (
+      <Box flexDirection="row" gap={1}>
+        <Text bold>{titulo}</Text>
+        <Text dimColor>· {n}</Text>
+      </Box>
+    )
+    // Cartão de 2 linhas, mesmo com o painel estreito: o que não cabe é cortado com reticências.
+    //   1: #n, tipo, nome | tempos
+    //   2: barra e comando | botões
     const cartao = (
       key: string,
       cabeca: string,
       tipo: string,
       nome: string,
       tempos: string,
-      cmd: string,
+      linha2: RenderChildren,
       botoes: RenderChildren,
-      barra?: RenderChildren,
     ) => (
-      <Box key={key} flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
-        <Box flexDirection="row" justifyContent="space-between" gap={2}>
-          <Text>
-            {cabeca}
+      <Box key={key} flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between" gap={1}>
+          <Box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} overflow="hidden">
+            {cabeca !== '' && <Text dimColor>{cabeca}</Text>}
             <Text bold color={corDoTipo(tipo)}>{tipo}</Text>
-            <Text bold>  {nome}</Text>
-          </Text>
-          <Text dimColor>{tempos}</Text>
+            <Text bold wrap="truncate-end">{nome}</Text>
+          </Box>
+          <Text dimColor wrap="truncate-end">{tempos}</Text>
         </Box>
-        {barra}
-        <Box flexDirection="row" justifyContent="space-between" gap={2}>
-          <Text dimColor>{curto(cmd, largura)}</Text>
-          <Box flexDirection="row" gap={1} flexShrink={0}>
+        <Box flexDirection="row" justifyContent="space-between" gap={1}>
+          <Box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} overflow="hidden">
+            {linha2}
+          </Box>
+          <Box flexDirection="row" gap={1} flexShrink={0} flexWrap="nowrap">
             {botoes}
           </Box>
         </Box>
       </Box>
     )
 
+    // Estado da sessão em um símbolo, com a descrição no hover (no terminal, a palavra ao lado).
+    const estado = (s: Sessao) => {
+      const [sim, cor, texto] = s.esperando
+        ? (['?', 'warning', 'Esperando resposta sua'] as const)
+        : s.trabalhando
+          ? (['●', 'success', 'Trabalhando'] as const)
+          : (['◌', 'suggestion', 'Só tarefas de fundo ou subagentes'] as const)
+      return terminal ? (
+        <Text color={cor}>{sim} {texto.toLowerCase()}</Text>
+      ) : (
+        dica(`e-${s.sessao}`, texto, <Text color={cor}>{sim}</Text>)
+      )
+    }
+    const arvore = arvoreDeSessoes(f.sessoes)
+
     return (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
-          <Text bold color={f.pausada ? 'warning' : undefined}>{resumo}</Text>
+          <Text bold color={f.pausada ? 'warning' : undefined} wrap="truncate-end">{resumo}</Text>
           <Button key="pausa" variant={f.pausada ? 'primary' : 'secondary'} onPress={() => controlar($, [f.pausada ? '-Soltar' : '-Pausar'])}>
             {f.pausada ? 'Soltar fila' : 'Pausar fila'}
           </Button>
@@ -370,18 +533,18 @@ export const register: Register = on => {
               r.tipo,
               r.nome,
               tempos,
-              r.cmd,
+              [
+                ...(prev === undefined ? [] : [<Text color={corDoTipo(r.tipo)}>{barra(Math.min(passou, prev), prev)}</Text>]),
+                <Text dimColor wrap="truncate-end">{curto(r.cmd, 200)}</Text>,
+              ],
               <>
-                <Button key={`l-${r.id}`} onPress={() => verLog(r.id)}>Log</Button>
-                <Button key={`m-${r.id}`} onPress={() => controlar($, ['-Cancelar', r.id])}>Matar</Button>
+                {botao(`l-${r.id}`, '📄', 'Log', () => verLog(r.id))}
+                {botao(`m-${r.id}`, '✕', 'Matar', () => controlar($, ['-Cancelar', r.id]))}
               </>,
-              prev === undefined ? undefined : (
-                <Progress label={`${r.tipo} ${r.nome}`} value={Math.min(passou, prev)} max={prev} valueText={`${dur(passou)} de ~${dur(prev)}`} />
-              ),
             )
           })}
           {f.velhas.map(v => (
-            <Text dimColor>
+            <Text dimColor wrap="truncate-end">
               {v.vaga} · {v.nome} · versão antiga do script{v.desde ? ` · desde ${v.desde}` : ''}
             </Text>
           ))}
@@ -394,41 +557,63 @@ export const register: Register = on => {
             const prev = estimativa(f.historico, q.tipo, q.pasta)
             return cartao(
               `q-${q.id}`,
-              `#${i + 1}  `,
+              `#${i + 1}`,
               q.tipo,
               q.nome,
-              `espera há ${dur(desde(q.criado, f.agora))}${prev === undefined ? '' : ` · est. ${dur(prev)}`}`,
-              q.cmd,
+              `espera ${dur(desde(q.criado, f.agora))}${prev === undefined ? '' : ` · est. ${dur(prev)}`}`,
+              <Text dimColor wrap="truncate-end">{curto(q.cmd, 200)}</Text>,
               <>
-                <Button key={`c-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'cima'])}>↑</Button>
-                <Button key={`b-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'baixo'])}>↓</Button>
-                <Button key={`t-${q.id}`} onPress={() => controlar($, ['-Mover', q.id, 'topo'])}>Topo</Button>
-                <Button key={`x-${q.id}`} onPress={() => controlar($, ['-Cancelar', q.id])}>Cancelar</Button>
+                {botao(`c-${q.id}`, '↑', 'Subir', () => controlar($, ['-Mover', q.id, 'cima']))}
+                {botao(`b-${q.id}`, '↓', 'Descer', () => controlar($, ['-Mover', q.id, 'baixo']))}
+                {botao(`t-${q.id}`, '↟', 'Topo', () => controlar($, ['-Mover', q.id, 'topo']))}
+                {botao(`x-${q.id}`, '✕', 'Cancelar', () => controlar($, ['-Cancelar', q.id]))}
               </>,
             )
           })}
         </Box>
 
         <Box flexDirection="column">
-          {secao('Outras tarefas de fundo', outras.length)}
-          {outras.length === 0 && <Text dimColor>nenhuma</Text>}
-          {outras.map(({ s, t }) => (
-            <Box key={`o-${s.sessao}-${t.id}`} flexDirection="row" justifyContent="space-between" gap={2}>
-              <Text>
-                <Text bold color={corDoTipo(tipoDaTarefa(t))}>{tipoDaTarefa(t)}</Text>
-                <Text>  {s.nome}  </Text>
-                <Text dimColor>{curto(t.command ?? t.description, largura)}</Text>
-              </Text>
-              <Text dimColor>{t.desde ? `há ${dur((f.agora - t.desde) / 1000)}` : ''}</Text>
-            </Box>
-          ))}
+          {secao('Sessões ativas', arvore.length)}
+          {arvore.length === 0 && <Text dimColor>nenhuma</Text>}
+          {arvore.map(({ s, nivel }) => {
+            const modelo = nomeDoModelo(s.modelo, s.esforco)
+            return (
+              <Box key={`s-${s.sessao}`} flexDirection="column" paddingLeft={nivel * 2}>
+                <Box flexDirection="row" gap={1}>
+                  <Box flexDirection="row" gap={1} flexShrink={1} overflow="hidden">
+                    {nivel > 0 && <Text dimColor>•</Text>}
+                    <Text bold wrap="truncate-end">{s.nome}</Text>
+                    {modelo !== '' && <Text dimColor wrap="truncate-end">({modelo})</Text>}
+                    {s.ccdPai && <Text dimColor wrap="truncate-end">(Sessão filha)</Text>}
+                  </Box>
+                  {estado(s)}
+                </Box>
+                {(s.subagentes ?? []).map(a => (
+                  <Box key={`a-${s.sessao}-${a.id}`} flexDirection="row" gap={1} paddingLeft={1}>
+                    <Text dimColor>⌊</Text>
+                    <Text color="merged">{nomeDoModelo(a.modelo) || a.tipo}</Text>
+                    <Text wrap="truncate-end">({a.descricao})</Text>
+                    <Text dimColor>[Subagente]</Text>
+                  </Box>
+                ))}
+                {tarefasDaSessao(s).map(t => (
+                  <Box key={`o-${s.sessao}-${t.id}`} flexDirection="row" gap={1} paddingLeft={1}>
+                    <Text dimColor>⌊</Text>
+                    <Text color={corDoTipo(tipoDaTarefa(t))}>{tipoDaTarefa(t)}</Text>
+                    <Text dimColor wrap="truncate-end">{curto(t.command ?? t.description, 200)}</Text>
+                    {t.desde !== undefined && <Text dimColor>há {dur((f.agora - t.desde) / 1000)}</Text>}
+                  </Box>
+                ))}
+              </Box>
+            )
+          })}
         </Box>
 
         {f.log && (
           <Box flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
             <Box flexDirection="row" justifyContent="space-between" gap={1}>
-              <Text bold>Log: {f.log.titulo}</Text>
-              <Button key="fechar-log" onPress={() => verLog(f.log?.id ?? '')}>Fechar log</Button>
+              <Text bold wrap="truncate-end">Log: {f.log.titulo}</Text>
+              {botao('fechar-log', '✕', 'Fechar log', () => verLog(f.log?.id ?? ''))}
             </Box>
             {f.log.linhas.length === 0 && <Text dimColor>(vazio)</Text>}
             {f.log.linhas.map(l => (

@@ -1,5 +1,5 @@
 import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const DADOS = 'C:\\dados\\fila-build'
 const PANE = {
@@ -73,7 +73,18 @@ function disco(on: On, arq: Arquivos, rodados: string[][]) {
   on('ui.open', () => ({ value: { isPlaced: true } }))
 }
 
-test('o painel mostra rodando, a fila na ordem do ordem.txt e as outras tarefas; ↑ move', async ($, on) => {
+// Todo o texto que um elemento mostra, descendo pelos filhos.
+function texto(el: unknown): string {
+  if (typeof el === 'string') return el
+  const e = el as { type?: string; children?: unknown[] } | undefined
+  // Dentro de um Text os pedaços vão colados; entre elementos, um espaço.
+  return (e?.children ?? []).map(texto).join(e?.type === 'Text' ? '' : ' ')
+}
+
+const filhosBox = (el: { children: unknown[] } | undefined) =>
+  (el?.children ?? []).filter(x => (x as { type?: string }).type === 'Box')
+
+test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas; botões em ícone com dica', async ($, on) => {
   const arq: Arquivos = new Map([
     [`${DADOS}\\fichas\\1-a.json`, ficha('1-a', 'alfa', 'rodando')],
     [`${DADOS}\\fichas\\2-b.json`, ficha('2-b', 'beta', 'espera')],
@@ -112,14 +123,37 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as outras tarefas;
   await $.command.run({ command: 'fila', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
 
   for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
+    // Painel estreito, como no app desktop.
+    const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface })
     expect((await ui.find({ type: 'Text', text: /1 rodando · 2 na fila/ }))?.text).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /Build\s+alfa/ }))?.text).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /^há 3\ds · est\. 2m30s$/ }))?.text).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /#1 / }))?.text).toMatch(/gama/)
-    expect((await ui.find({ type: 'Text', text: /#2 / }))?.text).toMatch(/beta/)
-    expect((await ui.find({ type: 'Text', text: /Subagente \(Explore\)/ }))?.text).toMatch(/Sessão Dois/)
-    expect((await ui.find({ type: 'Text', text: /pytest/ }))?.text).toMatch(/^Teste/)
+    const rodando = texto(await ui.find({ key: 'r-1-a' }))
+    expect(rodando).toMatch(/Build alfa/)
+    // ±1 s: o relógio anda entre montar a ficha e desenhar.
+    expect(rodando).toMatch(/há (29|30|31|32)s · est\. 2m30s/)
+    expect(rodando).toMatch(/▰+▱+ cargo build -p alfa/)
+    // Cada cartão tem só duas linhas: cabeçalho e comando com os botões.
+    const cartoes = (await ui.findAll({ type: 'Box' })).filter(b => /^[rq]-/.test(b.key ?? ''))
+    expect(cartoes.map(b => b.key)).toEqual(['r-1-a', 'q-3-c', 'q-2-b'])
+    for (const c of cartoes) expect(filhosBox(c)).toHaveLength(2)
+    expect(texto(cartoes[1])).toMatch(/^#1 Build gama/)
+    expect(texto(cartoes[2])).toMatch(/^#2 Build beta/)
+    for (const b of await ui.findAll({ type: 'Button' })) if (b.key !== 'pausa') expect(b.props.plain).toBe(true)
+    const rotulos = (ks: string[]) => Promise.all(ks.map(async k => (await ui.find({ key: k }))?.text))
+    if (surface === 'desktop') {
+      expect(await rotulos(['l-1-a', 'm-1-a', 'c-3-c', 'b-3-c', 't-3-c', 'x-3-c'])).toEqual(['📄', '✕', '↑', '↓', '↟', '✕'])
+      // A descrição fica escondida e aparece no hover.
+      const escondida = filhosBox(await ui.find({ key: 'dx-3-c' }))[0] as { props: Record<string, unknown> }
+      // O kit de teste não devolve o hover nas props: confere só que a dica nasce escondida e fora do fluxo.
+      expect(escondida.props).toMatchObject({ display: 'none', position: 'absolute' })
+      expect(texto(escondida)).toBe('Cancelar')
+    } else {
+      expect(await rotulos(['l-1-a', 'm-1-a', 't-3-c', 'x-3-c'])).toEqual(['Log', 'Matar', 'Topo', 'Cancelar'])
+    }
+    // Sessões ativas: as tarefas de fundo debaixo da sessão dona, sem as da fila.
+    const s2 = texto(await ui.find({ key: 's-s2' }))
+    expect(s2).toMatch(/Sessão Dois/)
+    expect(s2).toMatch(/⌊ Subagente \(Explore\) procura código/)
+    expect(s2).toMatch(/⌊ Teste pytest -q/)
     expect(await ui.find({ type: 'Text', text: /fila-build/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /não deve aparecer/ })).toBeUndefined()
     await ui.unmount()
@@ -128,16 +162,17 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as outras tarefas;
   // Minimizado (widget): só o resumo e o que roda.
   const mini = await $.ui.mount({ ...PANE, props: { ...PANE.props, placement: 'widget' }, surface: 'desktop' })
   expect((await mini.find({ type: 'Text', text: /1 rodando · 2 na fila/ }))?.text).toBeDefined()
-  expect((await mini.find({ type: 'Text', text: /alfa/ }))?.text).toMatch(/há 3\ds/)
+  expect((await mini.find({ type: 'Text', text: /alfa/ }))?.text).toMatch(/há (29|30|31|32)s/)
   expect(await mini.find({ type: 'Text', text: /gama/ })).toBeUndefined()
   await mini.unmount()
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'c-2-b' })
+  await ui.press({ key: 't-2-b' })
   await ui.press({ key: 'x-3-c' })
   await ui.press({ key: 'm-1-a' })
   await ui.press({ key: 'pausa' })
-  expect(rodados.map(a => a.slice(4).join(' '))).toEqual(['-Mover 2-b cima', '-Cancelar 3-c', '-Cancelar 1-a', '-Pausar'])
+  expect(rodados.map(a => a.slice(4).join(' '))).toEqual(['-Mover 2-b cima', '-Mover 2-b topo', '-Cancelar 3-c', '-Cancelar 1-a', '-Pausar'])
   expect(rodados[0]?.slice(0, 4)).toEqual(['pwsh', '-NoProfile', '-File', 'C:\\eu\\.claude\\scripts\\fila-build.ps1'])
 
   // Log da ficha rodando: últimas linhas.
@@ -147,6 +182,106 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as outras tarefas;
   expect((await ui.find({ type: 'Text', text: /^linha 30$/ }))?.text).toBe('linha 30')
   expect((await ui.find({ type: 'Text', text: /^linha 11$/ }))?.text).toBe('linha 11')
   await ui.unmount()
+})
+
+test('árvore de sessões: mãe com subagente, filha aninhada com subagente; inativa não aparece', async ($, on) => {
+  const sessao = (id: string, extra: object) =>
+    JSON.stringify({ sessao: id, nome: id, pasta: 'K:\\src', pid: 1, atualizado: agora, tarefas: [], ...extra })
+  const arq: Arquivos = new Map([
+    [
+      `${DADOS}\\sessoes\\f.json`,
+      sessao('f', {
+        nome: 'Defeito na Sombra',
+        ccd: 'local_f',
+        ccdPai: 'local_m',
+        modelo: 'claude-opus-5-5',
+        esforco: 'high',
+        esperando: true,
+        subagentes: [{ id: 'a2', modelo: 'claude-haiku-5-5', descricao: 'Pesquisa sobre Vulkan', tipo: 'Explore', desde: agora }],
+      }),
+    ],
+    [
+      `${DADOS}\\sessoes\\m.json`,
+      sessao('m', {
+        nome: 'Breath of Fire IV',
+        ccd: 'local_m',
+        modelo: 'claude-opus-5-5[1m]',
+        esforco: 'high',
+        trabalhando: true,
+        subagentes: [{ id: 'a1', modelo: 'claude-sonnet-5-5', descricao: 'Tradução', tipo: 'tradutor', desde: agora }],
+      }),
+    ],
+    [`${DADOS}\\sessoes\\p.json`, sessao('p', { nome: 'Parada', ccd: 'local_p', modelo: 'claude-opus-5-5', trabalhando: false })],
+  ])
+  disco(on, arq, [])
+  on('command.register', () => ({ value: { command: 'fila' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'K:\\src', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'fila', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const linhas = (await ui.findAll({ type: 'Box' })).filter(b => /^s-/.test(b.key ?? ''))
+    expect(linhas.map(b => b.key)).toEqual(['s-m', 's-f'])
+    expect(linhas[0]?.props.paddingLeft).toBe(0)
+    expect(linhas[1]?.props.paddingLeft).toBe(2)
+    const mae = texto(linhas[0])
+    expect(mae).toMatch(/^Breath of Fire IV \(Opus 5\.5 High\) ●/)
+    expect(mae).toMatch(/⌊ Sonnet 5\.5 \(Tradução\) \[Subagente\]/)
+    const filha = texto(linhas[1])
+    expect(filha).toMatch(/^• Defeito na Sombra \(Opus 5\.5 High\) \(Sessão filha\) \?/)
+    expect(filha).toMatch(/⌊ Haiku 5\.5 \(Pesquisa sobre Vulkan\) \[Subagente\]/)
+    expect(await ui.find({ type: 'Text', text: /Parada/ })).toBeUndefined()
+    if (surface === 'desktop') expect(texto(await ui.find({ key: 'e-f' }))).toMatch(/Esperando resposta sua/)
+    else expect(filha).toMatch(/\? esperando resposta sua/)
+    await ui.unmount()
+  }
+})
+
+test('a sessão publica quem é, se trabalha, os subagentes vivos, e avisa pedidos e o fim do turno', async ($, on) => {
+  const arq: Arquivos = new Map()
+  disco(on, arq, [])
+  const clock = mock.clock(on)
+  const avisos: { text: string; title?: string; key?: string }[] = []
+  on('ui.notify', (_, e) => {
+    avisos.push({ text: e.text, title: e.title, key: e.key })
+    return { value: { isSent: true as const, channel: 'client' } }
+  })
+  on('mcp.call', (_, e) => {
+    expect([e.server, e.tool, e.args]).toEqual(['ccd_session_mgmt', 'get_session', { session_id: 'self' }])
+    const j = { sessionId: 'local_f', parentSessionId: 'local_m', title: 'Defeito na Sombra', model: 'claude-opus-5-5', effort: 'high' }
+    return { value: { content: [{ type: 'text' as const, text: JSON.stringify(j) }], isError: false } }
+  })
+  on('session.cwd', () => ({ value: 'K:\\src\\Jogo' }))
+  on('command.register', () => ({ value: { command: 'fila' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_, e) => ({ text: e.answer }))
+  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'ag1' }))
+  on('classic.Stop', () => ({}))
+  on('classic.PermissionRequest', () => ({}))
+  const lido = () => JSON.parse(arq.get(`${DADOS}\\sessoes\\s1.json`)!)
+
+  await $.session.start({ cwd: 'K:\\src', surface: 'desktop', isInteractive: true })
+  await clock.advance(2000)
+  await $.turn.start({ text: 'oi', turnId: 't1' })
+  expect(lido()).toMatchObject({ nome: 'Defeito na Sombra', ccd: 'local_f', ccdPai: 'local_m', modelo: 'claude-opus-5-5', esforco: 'high', trabalhando: true })
+
+  await $.agent.spawn({ prompt: 'procura', description: 'Pesquisa sobre Vulkan', subagentType: 'Explore', model: 'haiku' })
+  expect(lido().subagentes).toMatchObject([{ id: 'ag1', modelo: 'claude-haiku-5-5', descricao: 'Pesquisa sobre Vulkan', tipo: 'Explore' }])
+
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'ls' } })
+  expect(lido().esperando).toBe(true)
+  expect(avisos.at(-1)).toEqual({ text: 'Pede permissão: Bash', title: 'Defeito na Sombra', key: 'pedido-s1' })
+
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'u1', reason: 'answer', agentId: 'ag1' })
+  expect(lido().subagentes).toEqual([])
+  expect(lido().trabalhando).toBe(true)
+
+  await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Pronto, testes passam.' })
+  expect(avisos.at(-1)).toEqual({ text: 'Terminou: Pronto, testes passam.', title: 'Defeito na Sombra', key: 'fim-s1' })
+  await $.turn.complete({ answer: 'Pronto', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(lido()).toMatchObject({ trabalhando: false, esperando: false })
 })
 
 test('Stop publica as tarefas ativas da sessão, com o nome da transcrição; session.end marca encerrada', async ($, on) => {

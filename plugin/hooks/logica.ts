@@ -1,5 +1,5 @@
 // Contas puras do painel (sem $): testadas em tests/logica.test.ts.
-import type { Ficha, Hist, Tarefa } from '../types'
+import type { Ficha, Hist, Sessao, Tarefa } from '../types'
 
 // Mesma regra do fila-build.ps1: quem já segura alguma pasta vai na frente; depois a ordem de ordem.txt
 // e os outros por chegada (id).
@@ -116,4 +116,47 @@ export function textoDoAviso(h: Hist): string {
   if (h.cancelado) return `■ ${quem} foi cancelado (código ${h.codigo}, ${dur(h.segundos)})`
   if (h.codigo === 0) return `✓ ${quem} terminou (código 0, ${dur(h.segundos)})`
   return `✗ ${quem} falhou (código ${h.codigo}, ${dur(h.segundos)})`
+}
+
+// "claude-opus-5-5[1m]" + "high" -> "Opus 5.5 High"; um apelido ("haiku") vira "Haiku".
+export function nomeDoModelo(modelo: string | undefined, esforco?: string): string {
+  const m = (modelo ?? '').toLowerCase().match(/(opus|sonnet|haiku|fable)(?:-(\d+)(?:-(\d{1,2})(?!\d))?)?/)
+  const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1)
+  const nome = m ? `${cap(m[1]!)}${m[2] ? ` ${m[2]}${m[3] ? `.${m[3]}` : ''}` : ''}` : (modelo ?? '')
+  const esf = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max' }[esforco ?? ''] ?? ''
+  return [nome, esf].filter(Boolean).join(' ')
+}
+
+// Tarefas de fundo que a sessão mostra embaixo dela: nem as da fila (já estão lá) nem os subagentes que ela já lista.
+export function tarefasDaSessao(s: Sessao): Tarefa[] {
+  const subs = s.subagentes ?? []
+  return s.tarefas.filter(
+    t => !ehDaFila(t) && !(t.type === 'subagent' && subs.some(a => a.id === t.id || a.descricao === t.description)),
+  )
+}
+
+export function sessaoAtiva(s: Sessao): boolean {
+  return !!(s.trabalhando || s.esperando || s.subagentes?.length || tarefasDaSessao(s).length)
+}
+
+// Sessões ativas em árvore: cada filha logo abaixo da mãe (nivel + 1). Filha de mãe inativa sobe para a raiz.
+export function arvoreDeSessoes(sessoes: readonly Sessao[]): { s: Sessao; nivel: number }[] {
+  const ativas = sessoes.filter(sessaoAtiva)
+  const ids = new Set(ativas.map(s => s.ccd).filter(Boolean))
+  const saida: { s: Sessao; nivel: number }[] = []
+  const vistos = new Set<Sessao>()
+  const descer = (s: Sessao, nivel: number) => {
+    if (vistos.has(s)) return // ciclo: nunca deveria haver, mas não trava o painel
+    vistos.add(s)
+    saida.push({ s, nivel })
+    if (s.ccd) for (const f of ativas) if (f.ccdPai === s.ccd) descer(f, nivel + 1)
+  }
+  for (const s of ativas) if (!s.ccdPai || !ids.has(s.ccdPai)) descer(s, 0)
+  return saida
+}
+
+// Barra de progresso em texto, para caber na linha do comando: "▰▰▰▱▱▱".
+export function barra(feito: number, total: number, n = 6): string {
+  const k = total > 0 ? Math.max(0, Math.min(n, Math.round((feito / total) * n))) : 0
+  return '▰'.repeat(k) + '▱'.repeat(n - k)
 }
