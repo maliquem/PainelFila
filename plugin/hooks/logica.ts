@@ -155,6 +155,19 @@ export function arvoreDeSessoes(sessoes: readonly Sessao[]): { s: Sessao; nivel:
   return saida
 }
 
+// Uma sessão como o list_sessions do app a mostra.
+export type DoApp = { sessionId: string; title?: string; cwd?: string }
+
+// Qual das sessões do app é esta: pelo título; a pasta desempata e é obrigatória quando o nome é só o da pasta
+// (sessão sem título), para não abrir outra que se chame igual. Na dúvida, nenhuma.
+export function idNaLista(lista: readonly DoApp[], s: Pick<Sessao, 'nome' | 'pasta'>): string | undefined {
+  const iguais = lista.filter(x => x.title === s.nome)
+  const semTitulo = s.pasta.split(/[\\/]/).filter(Boolean).at(-1) === s.nome
+  const achadas =
+    iguais.length > 1 || semTitulo ? iguais.filter(x => x.cwd?.toLowerCase() === s.pasta.toLowerCase()) : iguais
+  return achadas.length === 1 ? achadas[0]?.sessionId : undefined
+}
+
 // Barra de progresso em texto, para caber na linha do comando: "▰▰▰▱▱▱".
 export function barra(feito: number, total: number, n = 6): string {
   const k = total > 0 ? Math.max(0, Math.min(n, Math.round((feito / total) * n))) : 0

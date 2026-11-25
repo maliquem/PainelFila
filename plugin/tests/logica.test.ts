@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Ficha, Hist } from '../types'
-import { curto, dur, estimativa, fimMaisNovo, novosNoHistorico, ordenarFila, textoDoAviso, tipoDoComando, ultimasLinhas } from '../hooks/logica'
+import { curto, dur, estimativa, fimMaisNovo, idNaLista, novosNoHistorico, ordenarFila, textoDoAviso, tipoDoComando, ultimasLinhas } from '../hooks/logica'
 
 const f = (id: string, estado: Ficha['estado'] = 'espera') => ({ id, estado }) as Ficha
 const h = (o: Partial<Hist>) => ({ tipo: 'Build', pasta: 'K:\\a', cancelado: false, segundos: 10, codigo: 0, fim: '', nome: 'n', ...o }) as Hist
@@ -47,4 +47,17 @@ test('avisos: só o que terminou depois do último visto', async () => {
   expect(textoDoAviso(novos[0]!)).toBe("✗ Build 'jogo' falhou (código 2, 10s)")
   expect(textoDoAviso(h({ codigo: 0, segundos: 192 }))).toBe("✓ Build 'n' terminou (código 0, 3m12s)")
   expect(textoDoAviso(h({ codigo: 1, cancelado: true }))).toMatch(/^■ .* cancelado/)
+})
+
+test('sessão no app: pelo título; a pasta desempata e é exigida quando o nome é só o da pasta', async () => {
+  const lista = [
+    { sessionId: 'a', title: 'Um', cwd: 'K:/x' },
+    { sessionId: 'b', title: 'Dois', cwd: 'K:/y' },
+    { sessionId: 'c', title: 'Dois', cwd: 'K:/Z' },
+    { sessionId: 'd', title: 'Jogo', cwd: 'K:/outro' },
+  ]
+  expect(idNaLista(lista, { nome: 'Um', pasta: 'K:/qualquer' })).toBe('a')
+  expect(idNaLista(lista, { nome: 'Dois', pasta: 'K:/z' })).toBe('c')
+  expect(idNaLista(lista, { nome: 'Dois', pasta: 'K:/w' })).toBeUndefined()
+  expect(idNaLista(lista, { nome: 'Jogo', pasta: 'K:/Jogo' })).toBeUndefined()
 })

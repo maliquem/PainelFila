@@ -12,6 +12,7 @@ import {
   dur,
   estimativa,
   fimMaisNovo,
+  idNaLista,
   lerHistorico,
   nomeDoModelo,
   novosNoHistorico,
@@ -22,6 +23,7 @@ import {
   tituloDaTranscricao,
   ultimasLinhas,
 } from './logica'
+import type { DoApp } from './logica'
 
 const PANE = 'fila'
 const foto = atom({ plugin: 'painel-fila', key: 'foto' } as const, null, { shape: 'foto-1' })
@@ -289,21 +291,18 @@ e: { session_id: string; cwd: string; transcript_path: string; background_tasks?
 // Abre a sessão no app desktop pelo link claude:// dele (o Link do mod só abre https no desktop).
 // shortcut: formato do campo `link` de list_sessions; se o app mudar o endereço, atualizar aqui.
 const ID_DO_APP = /^local_[\w-]+$/
-// Sessão que ainda roda uma versão antiga do mod não publica o id: acha pelo título (a pasta desempata).
+// Sessão que ainda roda uma versão antiga do mod não publica o id: procura nas sessões do app.
 async function idPeloTitulo($: Api, s: Sessao): Promise<string | undefined> {
   const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 100 })
   const bloco = r.content.find(c => c.type === 'text') as { text?: string } | undefined
-  const lista = JSON.parse(bloco?.text ?? '') as { sessionId: string; title?: string; cwd?: string }[]
-  let iguais = lista.filter(x => x.title === s.nome)
-  if (iguais.length > 1) iguais = iguais.filter(x => x.cwd?.toLowerCase() === s.pasta.toLowerCase())
-  return iguais.length === 1 ? iguais[0]?.sessionId : undefined
+  return idNaLista(JSON.parse(bloco?.text ?? '') as DoApp[], s)
 }
 
 async function irPara($: Api, s: Sessao): Promise<void> {
   try {
     const ccd = s.ccd || (await idPeloTitulo($, s))
     if (!ccd || !ID_DO_APP.test(ccd)) {
-      await update($, aviso, () => `Não achei '${s.nome}' no app. Rode /reload-plugins nela.`)
+      await update($, aviso, () => `Não achei '${s.nome}' no app (sessão de terminal ou com o mod antigo; se for do app, rode /reload-plugins nela).`)
       return
     }
     const r = await $.process.run(['rundll32.exe', 'url.dll,FileProtocolHandler', `claude://claude.ai/epitaxy/${ccd}`])
