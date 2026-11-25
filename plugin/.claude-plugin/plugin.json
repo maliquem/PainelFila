@@ -1,0 +1,6 @@
+{
+  "name": "painel-fila",
+  "version": "0.1.0",
+  "description": "Painel /fila: fila de build numerada e tarefas de fundo de todas as sessões, com reordenar, pausar e cancelar",
+  "types": "./types/index.d.ts"
+}

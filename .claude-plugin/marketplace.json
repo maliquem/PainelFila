@@ -1,0 +1,5 @@
+{
+  "name": "painel-fila-local",
+  "owner": { "name": "PainelFila" },
+  "plugins": [{ "name": "painel-fila", "source": "./plugin", "description": "Painel da fila de build e das tarefas de fundo de todas as sessões" }]
+}
