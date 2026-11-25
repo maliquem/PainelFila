@@ -142,7 +142,8 @@ async function atualizar($: Api): Promise<void> {
 }
 
 async function painelAberto($: Api): Promise<boolean> {
-  return (await $.ui.panes()).some(p => p.id === PANE)
+  // isPlaced: numa sessão sem tela (`claude -p`) o painel fica aberto mas não desenhado, e não deve gastar leituras.
+  return (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
 }
 
 // Avisa o que terminou desde a última volta: o que é desta sessão, ou tudo se o painel está aberto aqui.
@@ -221,8 +222,9 @@ export const register: Register = on => {
         }
       })()
     })
-    // O painel abre sozinho em toda sessão com pessoa (não em `claude -p`).
-    if (e.isInteractive) await $.ui.open({ id: PANE, title: 'Fila' }).catch(() => undefined)
+    // Abre sozinho em toda sessão. Sem checar isInteractive: o app desktop abre as sessões pelo SDK, onde ele vem falso.
+    // Sem tela (`claude -p`), o painel espera sem ser desenhado.
+    await $.ui.open({ id: PANE, title: 'Fila' }).catch(() => undefined)
     return next(e)
   })
 

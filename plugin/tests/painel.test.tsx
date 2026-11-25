@@ -171,7 +171,7 @@ test('Stop publica as tarefas ativas da sessão, com o nome da transcrição; se
   expect(fim.tarefas).toEqual([])
 })
 
-test('o painel abre sozinho no começo da sessão, só com pessoa', async ($, on) => {
+test('o painel abre sozinho no começo da sessão, inclusive no app desktop (SDK, isInteractive falso)', async ($, on) => {
   const abertos: string[] = []
   on('ui.panes', () => ({ value: [] }))
   on('ui.open', (_, e) => {
@@ -180,8 +180,6 @@ test('o painel abre sozinho no começo da sessão, só com pessoa', async ($, on
   })
   on('command.register', () => ({ value: { command: 'fila' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  await $.session.start({ cwd: 'K:\src', surface: 'desktop', isInteractive: false })
-  expect(abertos).toEqual([])
-  await $.session.start({ cwd: 'K:\src', surface: 'desktop', isInteractive: true })
+  await $.session.start({ cwd: 'K:\\src', surface: null, isInteractive: false })
   expect(abertos).toEqual(['fila'])
 })
