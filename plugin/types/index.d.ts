@@ -47,7 +47,10 @@ export type Tarefa = {
 export type Sub = { id: string; modelo: string; descricao: string; tipo: string; desde: number }
 
 // Quem é a sessão no app desktop (ccd_session_mgmt get_session "self").
-export type Eu = { ccd: string; ccdPai?: string; titulo: string; modelo: string; esforco?: string }
+export type Eu = { ccd: string; ccdPai?: string; titulo: string; modelo: string; esforco?: string; remoto?: string }
+
+// Uma janela de limite da conta ($.session.usage e session.measure): five_hour, seven_day...
+export type Limite = { kind: string; percentUsed: number }
 
 // sessoes\<id>.json, escrito pelo mod em cada sessão. Os campos opcionais faltam nos arquivos de versões antigas.
 export type Sessao = {
@@ -95,6 +98,7 @@ declare module 'claude-code' {
       trabalhando: boolean
       esperando: boolean
       subagentes: Sub[]
+      limites: Limite[]
     }
   }
 }

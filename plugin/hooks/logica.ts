@@ -1,5 +1,5 @@
 // Contas puras do painel (sem $): testadas em tests/logica.test.ts.
-import type { Ficha, Hist, Sessao, Tarefa } from '../types'
+import type { Ficha, Hist, Limite, Sessao, Tarefa } from '../types'
 
 // Mesma regra do fila-build.ps1: quem já segura alguma pasta vai na frente; depois a ordem de ordem.txt
 // e os outros por chegada (id).
@@ -172,4 +172,32 @@ export function idNaLista(lista: readonly DoApp[], s: Pick<Sessao, 'nome' | 'pas
 export function barra(feito: number, total: number, n = 6): string {
   const k = total > 0 ? Math.max(0, Math.min(n, Math.round((feito / total) * n))) : 0
   return '▰'.repeat(k) + '▱'.repeat(n - k)
+}
+
+// Os dois medidores da faixa de limites, com a barra do Flightdeck. Sem leitura (sem assinatura ou antes da primeira
+// resposta): "—". Com a janela semanal e sem a de 5 horas (plano Ultra): barra cheia e "∞".
+export function medidores(limites: readonly Limite[]) {
+  const janela = (kind: string) => limites.find(l => l.kind === kind)
+  const semana = janela('seven_day')
+  return ([['5h', janela('five_hour')], ['7d', semana]] as const).map(([rotulo, l]) => {
+    const infinito = rotulo === '5h' && !l && !!semana
+    const pct = infinito ? 100 : l?.percentUsed
+    const b = pct === undefined ? '' : barra(pct, 100)
+    return {
+      rotulo,
+      cheio: b.replace(/▱/g, ''),
+      vazio: b.replace(/▰/g, ''),
+      valor: infinito ? '∞' : l ? `${Math.round(l.percentUsed)}%` : '—',
+      alto: !!l && l.percentUsed >= 80,
+      dica: infinito ? 'sem limite de 5 horas no seu plano' : undefined,
+    }
+  })
+}
+
+// O indicador do Acesso remoto: remoteControlState do get_session. `ligar` é o que o clique pede (sem ele, sem clique).
+export function acessoRemoto(estado: string | undefined) {
+  if (estado === 'on') return { palavra: 'ligado', cor: 'success' as const, dica: 'Acesso remoto ligado: clique para desligar', ligar: false }
+  if (estado === 'off') return { palavra: 'desligado', cor: undefined, dica: 'Acesso remoto desligado: clique para ligar', ligar: true }
+  if (estado === 'connecting') return { palavra: 'conectando', cor: 'warning' as const, dica: 'Acesso remoto conectando: clique para desligar', ligar: false }
+  return { palavra: 'indisponível', cor: undefined, dica: 'Acesso remoto indisponível nesta sessão', ligar: undefined }
 }

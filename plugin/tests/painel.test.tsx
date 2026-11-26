@@ -385,3 +385,65 @@ test('o painel abre sozinho no começo da sessão, inclusive no app desktop (SDK
   await $.session.start({ cwd: 'K:\\src', surface: null, isInteractive: false })
   expect(abertos).toEqual(['fila'])
 })
+
+test('faixa de limites acima do Rodando: usage no começo, session.measure atualiza; clicar no acesso remoto troca e relê', async ($, on) => {
+  disco(on, new Map(), [])
+  const clock = mock.clock(on)
+  let remoto = 'off'
+  let recusa = ''
+  const pedidos: unknown[] = []
+  const resposta = (text: string, isError = false) => ({ value: { content: [{ type: 'text' as const, text }], isError } })
+  on('mcp.call', (_, e) => {
+    if (e.tool !== 'set_remote_control') return resposta(JSON.stringify({ sessionId: 'local_f', remoteControlState: remoto }))
+    pedidos.push(e.args)
+    if (recusa) return resposta(recusa, true)
+    remoto = (e.args as { enabled: boolean }).enabled ? 'on' : 'off'
+    return resposta('{}')
+  })
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { window: 200000 }, rateLimits: [{ kind: 'seven_day', percentUsed: 50 }] },
+  }))
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  on('session.cwd', () => ({ value: 'K:\src' }))
+  on('command.register', () => ({ value: { command: 'fila' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'K:\src', surface: 'desktop', isInteractive: true })
+  await clock.advance(2000)
+  await $.command.run({ command: 'fila', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const faixa = async () => texto(await ui.find({ key: 'faixa' }))
+  expect(await faixa()).toMatch(/5h ▰▰▰▰▰▰ ∞ .*sem limite de 5 horas no seu plano.* 7d ▰▰▰▱▱▱ 50% .*⇄ desligado/)
+  const chaves = (await ui.findAll({ type: 'Box' })).map(b => b.key).filter(k => k === 'faixa' || k === 'sec-rodando')
+  expect(chaves).toEqual(['faixa', 'sec-rodando'])
+
+  await $.session.measure({
+    context: { window: 200000 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 100 }, { kind: 'seven_day', percentUsed: 51 }],
+    changed: ['rateLimits'],
+  })
+  expect(await faixa()).toMatch(/5h ▰▰▰▰▰▰ 100% .*7d ▰▰▰▱▱▱ 51%/)
+  expect(await faixa()).not.toMatch(/sem limite/)
+
+  await ui.press({ key: 'remoto' })
+  expect(await faixa()).toMatch(/⇄ ligado/)
+  await ui.press({ key: 'remoto' })
+  expect(await faixa()).toMatch(/⇄ desligado/)
+  expect(pedidos).toEqual([
+    { session_id: 'self', enabled: true },
+    { session_id: 'self', enabled: false },
+  ])
+  // Recusa do app aparece no painel, e o estado fica o que o app diz.
+  recusa = 'recusado pelo app'
+  await ui.press({ key: 'remoto' })
+  expect((await ui.find({ type: 'Text', text: /Não deu: recusado pelo app/ }))?.text).toBeDefined()
+  expect(await faixa()).toMatch(/⇄ desligado/)
+
+  // Indisponível: só o indicador, sem clique. Sem assinatura: —.
+  remoto = 'unavailable'
+  await clock.advance(60000)
+  await $.session.measure({ context: { window: 200000 }, rateLimits: [], changed: ['rateLimits'] })
+  expect(await faixa()).toMatch(/5h — .*7d — .*⇄ indisponível/)
+  expect(await ui.find({ key: 'remoto' })).toBeUndefined()
+  await ui.unmount()
+})

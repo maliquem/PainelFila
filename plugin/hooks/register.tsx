@@ -5,6 +5,7 @@ import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Ficha, Foto, Hist, Sessao, Sub, Tarefa, Velha } from '../types'
 import {
+  acessoRemoto,
   arvoreDeSessoes,
   barra,
   curto,
@@ -14,6 +15,7 @@ import {
   fimMaisNovo,
   idNaLista,
   lerHistorico,
+  medidores,
   nomeDoModelo,
   novosNoHistorico,
   ordenarFila,
@@ -36,6 +38,7 @@ const eu = atom({ plugin: 'painel-fila', key: 'eu' } as const, null)
 const trabalhando = atom({ plugin: 'painel-fila', key: 'trabalhando' } as const, false)
 const esperando = atom({ plugin: 'painel-fila', key: 'esperando' } as const, false)
 const subagentes = atom({ plugin: 'painel-fila', key: 'subagentes' } as const, [])
+const limites = atom({ plugin: 'painel-fila', key: 'limites' } as const, [])
 
 type Api = EngineInterface
 
@@ -213,21 +216,25 @@ async function publicarAqui($: Api): Promise<void> {
   await publicar($, await $.session.id(), await $.session.cwd()).catch(() => undefined)
 }
 
-// Quem é esta sessão no app desktop: id local_…, mãe, título, modelo e esforço. Fora do app (sem
+// O texto da resposta de uma ferramenta MCP.
+const textoDe = (r: { content: readonly { type: string }[] }) =>
+  (r.content.find(c => c.type === 'text') as { text?: string } | undefined)?.text ?? ''
+
+// Quem é esta sessão no app desktop: id local_…, mãe, título, modelo, esforço e Acesso remoto. Fora do app (sem
 // ccd_session_mgmt) fica só o modelo da própria sessão. Devolve true se algo mudou.
 async function quemSouEu($: Api): Promise<boolean> {
   const antes = await read($, eu)
   let novo = antes
   try {
     const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' })
-    const bloco = r.content.find(c => c.type === 'text') as { text?: string } | undefined
-    const j = JSON.parse(bloco?.text ?? '') as {
+    const j = JSON.parse(textoDe(r)) as {
       sessionId?: string
       parentSessionId?: string
       detached?: boolean
       title?: string
       model?: string
       effort?: string
+      remoteControlState?: string
     }
     if (r.isError || !j.sessionId) throw new Error('sem sessionId')
     novo = {
@@ -236,14 +243,26 @@ async function quemSouEu($: Api): Promise<boolean> {
       titulo: j.title ?? '',
       modelo: j.model ?? '',
       esforco: j.effort,
+      remoto: j.remoteControlState,
     }
   } catch {
     const modelo = await $.session.model().catch(() => '')
-    novo = { ccd: antes?.ccd ?? '', ccdPai: antes?.ccdPai, titulo: antes?.titulo ?? '', modelo, esforco: antes?.esforco }
+    novo = { ccd: antes?.ccd ?? '', ccdPai: antes?.ccdPai, titulo: antes?.titulo ?? '', modelo, esforco: antes?.esforco, remoto: antes?.remoto }
   }
   if (JSON.stringify(novo) === JSON.stringify(antes)) return false
   await update($, eu, () => novo)
   return true
+}
+
+// Clique no indicador: pede a troca ao app (que pode pedir aprovação ou recusar) e relê o estado.
+async function trocarRemoto($: Api, ligar: boolean): Promise<void> {
+  try {
+    const r = await $.mcp.call('ccd_session_mgmt', 'set_remote_control', { session_id: 'self', enabled: ligar })
+    await update($, aviso, () => (r.isError ? `Não deu: ${textoDe(r)}` : ''))
+  } catch (erro) {
+    await update($, aviso, () => `Não deu: ${String(erro)}`)
+  }
+  await quemSouEu($)
 }
 
 // Notificação nativa só desta sessão (cada sessão avisa por si, sem repetir entre elas).
@@ -294,8 +313,7 @@ const ID_DO_APP = /^local_[\w-]+$/
 // Sessão que ainda roda uma versão antiga do mod não publica o id: procura nas sessões do app.
 async function idPeloTitulo($: Api, s: Sessao): Promise<string | undefined> {
   const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 100 })
-  const bloco = r.content.find(c => c.type === 'text') as { text?: string } | undefined
-  return idNaLista(JSON.parse(bloco?.text ?? '') as DoApp[], s)
+  return idNaLista(JSON.parse(textoDe(r)) as DoApp[], s)
 }
 
 async function irPara($: Api, s: Sessao): Promise<void> {
@@ -332,10 +350,13 @@ export const register: Register = on => {
     let tique = 0
     $.clock.every(2000, () => {
       void (async () => {
-        // Logo no começo e a cada ~1 min confere título, modelo e mãe; publica se mudou.
-        if (tique++ % 30 === 0 && (await quemSouEu($).catch(() => false))) await publicarAqui($)
+        // Logo no começo e a cada ~1 min confere título, modelo, mãe e Acesso remoto (com o painel aberto, a cada
+        // ~10 s, porque dá para ligar e desligar pela barra do app); publica se mudou.
+        const vez = tique++
+        const aberto = await painelAberto($).catch(() => false)
+        if (vez % (aberto ? 5 : 30) === 0 && (await quemSouEu($).catch(() => false))) await publicarAqui($)
         await avisar($).catch(() => undefined)
-        if (!(await painelAberto($).catch(() => false))) return
+        if (!aberto) return
         await atualizar($)
         // a cada ~30 s limpa fichas e sessões de donos mortos; a marca 'limpeza' faz só uma sessão rodar por vez
         if (++volta % 15 === 0) {
@@ -347,11 +368,19 @@ export const register: Register = on => {
         }
       })()
     })
+    // Os limites já conhecidos; depois cada session.measure atualiza.
+    const uso = await $.session.usage().catch(() => undefined)
+    if (uso) await update($, limites, () => uso.rateLimits)
     // Abre sozinho em toda sessão. Sem checar isInteractive: o app desktop abre as sessões pelo SDK, onde ele vem falso.
     // Sem tela (`claude -p`), o painel espera sem ser desenhado.
     await $.ui.open({ id: PANE, title: 'Fila' }).catch(() => undefined)
     return next(e)
   })
+
+  on('session.measure', async ($, e, next) => {
+    await update($, limites, () => e.rateLimits)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'fila' }, async $ => {
     await atualizar($)
@@ -479,10 +508,10 @@ export const register: Register = on => {
 
     // A descrição aparece ao passar o mouse: um Box com key é o escopo do hover, e o cartão escondido
     // (absolute, fora do fluxo) aparece por cima sem mexer no resto.
-    const dica = (key: string, texto: string, alvo: RenderChildren, lado: 'left' | 'right' = 'right') => (
+    const dica = (key: string, texto: string, alvo: RenderChildren, lado: 'left' | 'right' = 'right', topo = 1) => (
       <Box key={key} flexShrink={lado === 'right' ? 0 : 1} minWidth={lado === 'right' ? 3 : 0} justifyContent="center">
         {alvo}
-        <Box position="absolute" top={1} {...{ [lado]: 0 }} display="none" hover={{ display: 'flex' }} backgroundColor="text" paddingX={1}>
+        <Box position="absolute" top={topo} {...{ [lado]: 0 }} display="none" hover={{ display: 'flex' }} backgroundColor="text" paddingX={1}>
           <Text color="inverseText" wrap="truncate-end">{texto}</Text>
         </Box>
       </Box>
@@ -587,6 +616,34 @@ export const register: Register = on => {
         </Box>
       </Box>
     )
+    // Faixa de limites: 5h à esquerda, 7d no meio, Acesso remoto desta sessão à direita; estreito, quebra em 2 linhas.
+    // As dicas sobem (topo -1): para baixo, o cartão Rodando, desenhado depois, pintaria por cima.
+    const medidas = medidores(await read($, limites)).map(m => {
+      const linha = (
+        <Text>
+          <Text dimColor>{m.rotulo} </Text>
+          <Text color={m.alto ? 'warning' : 'suggestion'}>{m.cheio}</Text>
+          <Text color="subtle">{m.vazio}</Text>
+          <Text bold>{m.cheio || m.vazio ? ' ' : ''}{m.valor}</Text>
+        </Text>
+      )
+      return m.dica && !terminal ? dica(`lim-${m.rotulo}`, m.dica, linha, 'left', -1) : linha
+    })
+    const rc = acessoRemoto((await read($, eu))?.remoto)
+    const marca = (
+      <Text color={rc.cor} dimColor={!rc.cor}>
+        ⇄ {terminal ? 'remoto ' : ''}{rc.palavra}
+      </Text>
+    )
+    const ligar = rc.ligar
+    const indicador =
+      ligar === undefined ? marca : <Button key="remoto" plain onPress={() => trocarRemoto($, ligar)}>{marca}</Button>
+    const faixa = (
+      <Box key="faixa" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2} paddingX={1}>
+        {medidas}
+        {terminal ? indicador : dica('lim-remoto', rc.dica, indicador, 'right', -1)}
+      </Box>
+    )
     const arvore = arvoreDeSessoes(f.sessoes)
 
     return (
@@ -600,6 +657,8 @@ export const register: Register = on => {
         {f.pausada && <Text color="warning">Fila pausada: nada novo começa até soltar.</Text>}
         {msg !== '' && <Text color="error">{msg}</Text>}
         {f.erro && <Text color="error">Erro ao ler a pasta: {f.erro}</Text>}
+
+        {faixa}
 
         {secao('sec-rodando', 'Rodando', 'claude', nRodando > 0, nRodando > 0 ? `● ${nRodando} rodando` : '○ parada', [
           ...f.rodando.map(r => {

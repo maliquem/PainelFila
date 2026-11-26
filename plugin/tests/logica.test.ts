@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Ficha, Hist } from '../types'
-import { curto, dur, estimativa, fimMaisNovo, idNaLista, novosNoHistorico, ordenarFila, textoDoAviso, tipoDoComando, ultimasLinhas } from '../hooks/logica'
+import { acessoRemoto, curto, dur, estimativa, fimMaisNovo, idNaLista, medidores, novosNoHistorico, ordenarFila, textoDoAviso, tipoDoComando, ultimasLinhas } from '../hooks/logica'
 
 const f = (id: string, estado: Ficha['estado'] = 'espera') => ({ id, estado }) as Ficha
 const h = (o: Partial<Hist>) => ({ tipo: 'Build', pasta: 'K:\\a', cancelado: false, segundos: 10, codigo: 0, fim: '', nome: 'n', ...o }) as Hist
@@ -60,4 +60,27 @@ test('sessão no app: pelo título; a pasta desempata e é exigida quando o nome
   expect(idNaLista(lista, { nome: 'Dois', pasta: 'K:/z' })).toBe('c')
   expect(idNaLista(lista, { nome: 'Dois', pasta: 'K:/w' })).toBeUndefined()
   expect(idNaLista(lista, { nome: 'Jogo', pasta: 'K:/Jogo' })).toBeUndefined()
+})
+
+test('limites: porcentagem e barra; sem a janela de 5 horas, ∞; sem leitura nenhuma, —', async () => {
+  const barras = (l: Parameters<typeof medidores>[0]) => medidores(l).map(m => `${m.rotulo} ${m.cheio}${m.vazio} ${m.valor}`)
+  const max = [{ kind: 'five_hour', percentUsed: 33.5 }, { kind: 'seven_day', percentUsed: 80 }]
+  expect(barras(max)).toEqual(['5h ▰▰▱▱▱▱ 34%', '7d ▰▰▰▰▰▱ 80%'])
+  expect(medidores(max).map(m => [m.alto, m.dica])).toEqual([[false, undefined], [true, undefined]])
+  const ultra = [{ kind: 'seven_day', percentUsed: 0 }]
+  expect(barras(ultra)).toEqual(['5h ▰▰▰▰▰▰ ∞', '7d ▱▱▱▱▱▱ 0%'])
+  expect(medidores(ultra)[0]).toMatchObject({ alto: false, dica: 'sem limite de 5 horas no seu plano' })
+  expect(barras([])).toEqual(['5h  —', '7d  —'])
+  // Só o limite de gasto de um gateway não é plano sem janela de 5 horas.
+  expect(barras([{ kind: 'spend_limit', percentUsed: 10 }])).toEqual(['5h  —', '7d  —'])
+})
+
+test('acesso remoto: o clique pede o contrário; indisponível ou sem leitura não tem clique', async () => {
+  expect(['on', 'off', 'connecting', 'unavailable', undefined].map(e => [acessoRemoto(e).palavra, acessoRemoto(e).ligar])).toEqual([
+    ['ligado', false],
+    ['desligado', true],
+    ['conectando', false],
+    ['indisponível', undefined],
+    ['indisponível', undefined],
+  ])
 })

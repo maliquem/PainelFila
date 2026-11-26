@@ -25,6 +25,7 @@ Teste: `pwsh -NoProfile -File fila/teste-fila.ps1` (usa uma pasta temporária, n
 
 O painel abre sozinho no começo de toda sessão. Se for fechado, `/fila` abre de novo. Ele mostra:
 
+- **Faixa de limites** (acima do cartão Rodando): o limite de 5 horas (`5h`) e o semanal (`7d`), cada um com barra ▰▱ e porcentagem (a barra muda de cor a partir de 80%). No plano sem limite de 5 horas a barra do `5h` fica cheia, com `∞`; sem leitura (sem assinatura, ou antes da primeira resposta da sessão) aparece `—`. À direita, o Acesso remoto da sessão que desenha o painel (⇄ ligado, desligado, conectando ou indisponível); clicar liga ou desliga (o app pode pedir aprovação ou recusar). O que mudar pela barra do app aparece em cerca de 10 s.
 - **Rodando**: tipo, nome, comando, há quanto tempo, o tempo estimado (média das últimas 5 do mesmo tipo e pasta) e uma barra ▰▱. Botões 🗋 (log) e × (matar).
 - **Na fila**: a posição, há quanto tempo espera e o comando, com os botões ↟ (topo), ↑, ↓ e × (cancelar).
 - **Sessões ativas**: as sessões que estão trabalhando, esperando resposta sua ou com algo em segundo plano, em árvore (a sessão filha abaixo da mãe). Embaixo de cada uma, os subagentes (modelo e o que fazem) e os comandos de fundo fora da fila. O símbolo diz o estado: ● trabalhando, ? esperando você, ◌ só coisas de fundo. Clicar no nome de uma sessão do app desktop leva até ela (abre o link `claude://` dela; se ela ainda roda uma versão antiga do mod, é achada pelo título).
