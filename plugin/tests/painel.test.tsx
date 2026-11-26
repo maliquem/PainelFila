@@ -387,14 +387,17 @@ test('o painel abre sozinho no começo da sessão, inclusive no app desktop (SDK
 })
 
 test('faixa de limites acima do Rodando: usage no começo, session.measure atualiza; clicar no acesso remoto troca e relê', async ($, on) => {
-  disco(on, new Map(), [])
+  const arq: Arquivos = new Map()
+  disco(on, arq, [])
   const clock = mock.clock(on)
   let remoto = 'off'
+  let titulo = 'Antes'
   let recusa = ''
   const pedidos: unknown[] = []
   const resposta = (text: string, isError = false) => ({ value: { content: [{ type: 'text' as const, text }], isError } })
   on('mcp.call', (_, e) => {
-    if (e.tool !== 'set_remote_control') return resposta(JSON.stringify({ sessionId: 'local_f', remoteControlState: remoto }))
+    if (e.tool !== 'set_remote_control')
+      return resposta(JSON.stringify({ sessionId: 'local_f', title: titulo, remoteControlState: remoto }))
     pedidos.push(e.args)
     if (recusa) return resposta(recusa, true)
     remoto = (e.args as { enabled: boolean }).enabled ? 'on' : 'off'
@@ -404,10 +407,10 @@ test('faixa de limites acima do Rodando: usage no começo, session.measure atual
     value: { startedAt: 0, context: { window: 200000 }, rateLimits: [{ kind: 'seven_day', percentUsed: 50 }] },
   }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
-  on('session.cwd', () => ({ value: 'K:\src' }))
+  on('session.cwd', () => ({ value: 'K:\\src' }))
   on('command.register', () => ({ value: { command: 'fila' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  await $.session.start({ cwd: 'K:\src', surface: 'desktop', isInteractive: true })
+  await $.session.start({ cwd: 'K:\\src', surface: 'desktop', isInteractive: true })
   await clock.advance(2000)
   await $.command.run({ command: 'fila', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
 
@@ -425,9 +428,15 @@ test('faixa de limites acima do Rodando: usage no começo, session.measure atual
   expect(await faixa()).toMatch(/5h ▰▰▰▰▰▰ 100% .*7d ▰▰▰▱▱▱ 51%/)
   expect(await faixa()).not.toMatch(/sem limite/)
 
+  const publicado = () => arq.get(`${DADOS}\\sessoes\\s1.json`)
+  const antes = publicado()
+  // Só o remoto mudou: nada a publicar. Título novo junto com o clique: publica.
   await ui.press({ key: 'remoto' })
   expect(await faixa()).toMatch(/⇄ ligado/)
+  expect(publicado()).toBe(antes)
+  titulo = 'Depois'
   await ui.press({ key: 'remoto' })
+  expect(JSON.parse(publicado()!).nome).toBe('Depois')
   expect(await faixa()).toMatch(/⇄ desligado/)
   expect(pedidos).toEqual([
     { session_id: 'self', enabled: true },

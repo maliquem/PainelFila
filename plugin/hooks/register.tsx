@@ -221,7 +221,7 @@ const textoDe = (r: { content: readonly { type: string }[] }) =>
   (r.content.find(c => c.type === 'text') as { text?: string } | undefined)?.text ?? ''
 
 // Quem é esta sessão no app desktop: id local_…, mãe, título, modelo, esforço e Acesso remoto. Fora do app (sem
-// ccd_session_mgmt) fica só o modelo da própria sessão. Devolve true se algo mudou.
+// ccd_session_mgmt) fica só o modelo da própria sessão. Devolve true se mudou algo que a sessão publica.
 async function quemSouEu($: Api): Promise<boolean> {
   const antes = await read($, eu)
   let novo = antes
@@ -251,7 +251,9 @@ async function quemSouEu($: Api): Promise<boolean> {
   }
   if (JSON.stringify(novo) === JSON.stringify(antes)) return false
   await update($, eu, () => novo)
-  return true
+  // O Acesso remoto não vai para o arquivo da sessão: só ele ter mudado não pede publicação.
+  const publicado = (x: typeof antes) => JSON.stringify({ ...x, remoto: undefined })
+  return publicado(novo) !== publicado(antes)
 }
 
 // Clique no indicador: pede a troca ao app (que pode pedir aprovação ou recusar) e relê o estado.
@@ -262,7 +264,8 @@ async function trocarRemoto($: Api, ligar: boolean): Promise<void> {
   } catch (erro) {
     await update($, aviso, () => `Não deu: ${String(erro)}`)
   }
-  await quemSouEu($)
+  // O título ou o modelo podem ter mudado junto: o próximo tique já não veria a diferença.
+  if (await quemSouEu($)) await publicarAqui($)
 }
 
 // Notificação nativa só desta sessão (cada sessão avisa por si, sem repetir entre elas).
