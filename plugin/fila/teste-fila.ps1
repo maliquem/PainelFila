@@ -273,6 +273,15 @@ try {
     Ok ((Ficha M2).estado -eq 'espera') 'RAM livre 2 GB: M2 espera o 3º ponto'
     EsperarFim A3, M1, M2
     Ok ((T (Hist M1).comeco) -ge (T (Hist A3).fim).AddSeconds(-0.5) -and (T (Hist M2).comeco) -ge (T (Hist A3).fim).AddSeconds(-0.5)) 'M1 e M2 entraram com até 2 pontos em uso'
+    Iniciar S3 0.3 -Sozinho -Ambiente @{ FILA_TESTE_MAQUINA = '95,16' }
+    EsperarFim S3 10
+    Ok ((Hist S3).codigo -eq 0) '-Sozinho com a máquina cheia entra quando nada está rodando'
+    # Medição de verdade (Add-Type, GetSystemTimes, GlobalMemoryStatusEx): '' tira a simulação deste pedido.
+    Iniciar A4 3 -extra 'cargo'
+    Ok (Esperar { (Ficha A4).estado -eq 'rodando' }) 'A4 (2) rodando'
+    Iniciar M3 0.3 -Ambiente @{ FILA_TESTE_MAQUINA = '' }
+    EsperarFim A4, M3
+    Ok ($jobs.M3.proc.ExitCode -eq 0 -and (Hist M3).codigo -eq 0) "medição real da máquina roda sem erro ($($jobs.M3.proc.ExitCode))"
 
     Write-Host '18. -Peso'
     Iniciar X1 3 -Peso 3
