@@ -10,8 +10,9 @@ export type Ficha = {
   criado: string
   estado: 'espera' | 'rodando'
   comeco: string | null
-  vagas: number
-  seguras: string[]
+  peso?: number // pontos (1 a 4); falta na ficha da versão de vagas
+  vagas?: number
+  seguras?: string[]
   log: string
   emProcesso?: boolean
 }
@@ -22,6 +23,7 @@ export type Hist = {
   nome: string
   sessao: string
   tipo: string
+  peso?: number
   cmd: string
   pasta: string
   comeco: string

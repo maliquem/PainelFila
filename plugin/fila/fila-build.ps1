@@ -1,9 +1,13 @@
-# Fila de build: no máximo duas por vez na máquina, em ordem, com painel (/fila no Claude Code).
+# Fila de build por pontos: até 4 pontos em uso na máquina, em ordem, com painel (/fila no Claude Code).
 #
 # Rodar (como sempre):
-#   pwsh -NoProfile -File ~/.claude/scripts/fila-build.ps1 -Nome <sessão> [-Sozinho] [-Tipo <tipo>] <comando> [args...]
-#   -Sozinho ocupa as duas vagas (medição) e segura cada vaga que se libera até ter as duas.
-#   -Tipo (Build, Teste, Jogo, Medição...) é opcional; sem ele vem do comando.
+#   pwsh -NoProfile -File ~/.claude/scripts/fila-build.ps1 -Nome <sessão> [-Sozinho] [-Tipo <tipo>] [-Peso 1-4] <comando> [args...]
+#   Peso deduzido: Build 2, Teste com compilação (cargo test, nextest, ctest) 2, Jogo 1, Outro 1, Medição/-Sozinho 4.
+#   -Peso corrige a dedução. -Tipo (Build, Teste, Jogo, Medição...) é opcional; sem ele vem do comando.
+# Regra: até 2 pontos em uso entra sempre; passar de 2 exige CPU < 75% (média de uns 5 s) e RAM livre > 4 GB.
+#   Pedido sozinho na máquina entra sempre. Quem está na frente e não cabe pode ser passado por um leve (peso 1)
+#   só enquanto esperou menos de 3 min (FILA_PASSAR_SEGUNDOS); -Sozinho nunca é passado.
+#   Dois pesados juntos: o que entra recebe CARGO_BUILD_JOBS=8 e CMAKE_BUILD_PARALLEL_LEVEL=8 se não vierem definidos.
 # Controle (usado pelo painel):
 #   fila-build.ps1 -Mover <id> topo|cima|baixo | -Cancelar <id> | -Pausar | -Soltar | -Limpar
 #
@@ -13,7 +17,9 @@
 #   fichas\<id>.cancelar   pedido de cancelamento vindo do painel
 #   ordem.txt          ordem de espera que o painel reescreve; quem não está nela vai depois, por chegada
 #   pausa              existindo, nada novo começa
-#   lock, lock2, sozinho   as vagas (pastas): as mesmas da versão antiga, que ainda pode estar rodando
+#   lock, lock2, sozinho   vagas da versão antiga (de 2 vagas), que ainda pode estar rodando: lock e lock2
+#                      valem 2 pontos cada enquanto existirem. A versão de pontos não cria pastas: os pontos em
+#                      uso são as fichas 'rodando', e a decisão de entrar é tomada e gravada dentro da trava.
 #   logs\<id>.log      saída de cada pedido; historico.jsonl  as últimas execuções
 $ErrorActionPreference = 'Continue'
 $argv = @($args)
@@ -21,7 +27,10 @@ $dir = if ($env:FILA_BUILD_DIR) { $env:FILA_BUILD_DIR } else { Join-Path $env:LO
 $fichas = Join-Path $dir 'fichas'
 $logs = Join-Path $dir 'logs'
 $sessoes = Join-Path $dir 'sessoes'
-$Vagas = @('lock', 'lock2')
+$Vagas = @('lock', 'lock2')   # só da versão antiga
+$Capacidade = 4
+$LivreSempre = 2   # até aqui entra sem olhar a máquina
+$PassarSeg = if ($env:FILA_PASSAR_SEGUNDOS) { [double]$env:FILA_PASSAR_SEGUNDOS } else { 180 }
 New-Item -ItemType Directory -Force $fichas, $logs | Out-Null
 
 function Agora { [DateTime]::Now.ToString('o') }
@@ -40,7 +49,7 @@ function Ler-Json([string]$p) {
     try { Get-Content -Raw -LiteralPath $p -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { $null }
 }
 
-# Trava entre processos para ordem.txt e o histórico (os dois têm mais de um escritor).
+# Trava entre processos para ordem.txt, o histórico e a decisão de entrar.
 function Com-Trava([scriptblock]$sb) {
     $m = [Threading.Mutex]::new($false, 'Local\fila-build')
     $tem = $false
@@ -88,8 +97,8 @@ function Ler-Fichas {
     , $lista.ToArray()
 }
 
-# Fila de espera na ordem: primeiro quem já segura alguma pasta (senão um -Sozinho com 'sozinho' e outro
-# movido para o topo se travam), depois os ids de ordem.txt, na ordem dele, e os outros, por chegada (id).
+# Fila de espera na ordem: primeiro quem já segura alguma pasta (um -Sozinho da versão antiga), depois os ids
+# de ordem.txt, na ordem dele, e os outros, por chegada (id).
 function Ordem-Espera($lista) {
     $ord = @(Get-Content -LiteralPath (Join-Path $dir 'ordem.txt') -ErrorAction SilentlyContinue)
     $pos = @{}
@@ -98,8 +107,8 @@ function Ordem-Espera($lista) {
         Sort-Object -Stable @{ e = { if (@($_.seguras).Count) { 0 } else { 1 } } }, @{ e = { if ($pos.ContainsKey($_.id)) { $pos[$_.id] } else { [int]::MaxValue } } }, @{ e = { $_.id } })
 }
 
-# Vaga livre? Quebra a de dono morto. dono.txt = pid|nome|data[|id|início do processo]; a versão antiga
-# grava só os três primeiros. Sem dono.txt legível há mais de 1 min (criação pela metade) também é morta.
+# Vaga antiga livre? Quebra a de dono morto. dono.txt = pid|nome|data[|id|início do processo]; a versão mais
+# antiga grava só os três primeiros. Sem dono.txt legível há mais de 1 min (criação pela metade) também é morta.
 function Vaga-Livre([string]$v) {
     $l = Join-Path $dir $v
     if (-not (Test-Path -LiteralPath $l)) { return $true }
@@ -119,14 +128,6 @@ function Vaga-Livre([string]$v) {
     -not (Test-Path -LiteralPath $l)
 }
 
-function Pegar-Pasta([string]$v) {
-    $l = Join-Path $dir $v
-    if (-not (Vaga-Livre $v)) { return $false }
-    try { New-Item -ItemType Directory -Path $l -ErrorAction Stop | Out-Null } catch { return $false }
-    "$PID|$Nome|$(Agora)|$id|$($ficha.inicioProc)" | Set-Content -LiteralPath (Join-Path $l 'dono.txt')
-    $true
-}
-
 function Tipo-Do-Comando([string]$texto, [bool]$sozinho) {
     if ($sozinho) { return 'Medição' }
     $t = $texto.ToLowerInvariant()
@@ -134,6 +135,72 @@ function Tipo-Do-Comando([string]$texto, [bool]$sozinho) {
     if ($t -match '(?<![a-z])(c|py)?test(e|es|s)?(?![a-z])|nextest') { return 'Teste' }
     if ($t -match '\b(cargo|cmake|ninja|msbuild|make)\b') { return 'Build' }
     'Outro'
+}
+
+function Peso-Do-Comando([string]$texto, [string]$tipo) {
+    switch ($tipo) {
+        'Medição' { 4 }
+        'Build' { 2 }
+        'Teste' { if ($texto.ToLowerInvariant() -match '\bcargo\b|nextest|ctest') { 2 } else { 1 } }
+        default { 1 }
+    }
+}
+
+# Ficha da versão de vagas não tem peso: cada vaga vale 2.
+function Peso-De($o) { if ($o.peso) { [int]$o.peso } else { [Math]::Min($Capacidade, 2 * [Math]::Max(1, [int]$o.vagas)) } }
+
+# ---- conferência da máquina: uma amostra por volta do laço de espera; média da janela (~5 s) ----
+$amostras = [Collections.Generic.List[object]]::new()
+$medindo = $false
+function Medir-Maquina {
+    if ($env:FILA_TESTE_MAQUINA) { return }
+    if (-not ('FilaMaquina' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class FilaMaquina {
+    [DllImport("kernel32.dll")] public static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
+    [StructLayout(LayoutKind.Sequential)] struct Mem { public uint len, load; public ulong total, avail, tp, ap, tv, av, ave; }
+    [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx(ref Mem m);
+    public static ulong Livre() { var m = new Mem(); m.len = (uint)Marshal.SizeOf(m); GlobalMemoryStatusEx(ref m); return m.avail; }
+}
+'@
+    }
+    $ocioso = 0L; $nucleo = 0L; $usuario = 0L
+    $null = [FilaMaquina]::GetSystemTimes([ref]$ocioso, [ref]$nucleo, [ref]$usuario)
+    $amostras.Add(@([DateTime]::UtcNow, $ocioso, ($nucleo + $usuario)))   # o tempo de núcleo já inclui o ocioso
+    while ($amostras.Count -gt 6) { $amostras.RemoveAt(0) }
+}
+
+# CPU total abaixo de 75% e RAM livre acima de 4 GB? FILA_TESTE_MAQUINA='cpu,ramGB' simula (teste).
+# A primeira chamada começa a medir e diz não: a média precisa de pelo menos 3 s de amostras.
+function Maquina-Ok {
+    if ($env:FILA_TESTE_MAQUINA) { $c, $r = $env:FILA_TESTE_MAQUINA -split ','; return [double]$c -lt 75 -and [double]$r -gt 4 }
+    if (-not $script:medindo) { $script:medindo = $true; Medir-Maquina }
+    $a = $amostras[0]; $b = $amostras[$amostras.Count - 1]
+    if (($b[0] - $a[0]).TotalSeconds -lt 3) { return $false }
+    $cpu = 100 * (1 - ($b[1] - $a[1]) / [Math]::Max(1, $b[2] - $a[2]))
+    $cpu -lt 75 -and [FilaMaquina]::Livre() -gt 4GB
+}
+
+# Pontos em uso: fichas 'rodando' da versão de pontos mais 2 por vaga antiga (lock, lock2) de dono vivo.
+function Pontos-Em-Uso($lista) {
+    $n = 2 * @($Vagas | Where-Object { -not (Vaga-Livre $_) }).Count
+    foreach ($o in $lista) { if ($o.estado -eq 'rodando' -and $o.peso) { $n += [int]$o.peso } }
+    $n
+}
+
+# Este pedido entra agora? Anda pela ordem: quem está na frente e cabe fica com os pontos dele; quem não cabe
+# segura todos atrás, menos um leve, e só enquanto esperou menos de $PassarSeg (sem fome). -Sozinho não é passado.
+function Posso-Entrar($lista) {
+    $usados = Pontos-Em-Uso $lista
+    foreach ($o in Ordem-Espera $lista) {
+        $p = Peso-De $o
+        $cabe = $usados + $p -le $Capacidade -and ($usados -eq 0 -or $usados + $p -le $LivreSempre -or (Maquina-Ok))
+        if ($o.id -eq $id) { return $cabe }
+        if ($cabe) { $usados += $p; continue }
+        if ($Peso -gt 1 -or $p -ge $Capacidade -or -not $o.criado -or ((Get-Date) - [DateTime]$o.criado).TotalSeconds -ge $PassarSeg) { return $false }
+    }
+    $false
 }
 
 function Limpar-Tudo {
@@ -182,7 +249,7 @@ switch ($argv[0]) {
         $o = Ler-Json $arq
         if ($o -and $o.estado -eq 'rodando') {
             if (-not (Vivo $o.pid $o.inicioProc)) { "fila-build: '$alvo' já não está rodando"; exit 1 }
-            # Mata a árvore do comando (filhos do script); o script segue, solta a vaga e grava o histórico.
+            # Mata a árvore do comando (filhos do script); o script segue, solta os pontos e grava o histórico.
             # Só filhos nascidos depois do script: um pid antigo reaproveitado não é filho dele.
             $nasceu = [DateTime]::new([long]$o.inicioProc, 'Utc')
             $achou = $false
@@ -193,7 +260,7 @@ switch ($argv[0]) {
                 Start-Sleep -Milliseconds 100
             }
             # Comando dentro do próprio pwsh (.ps1, função) ou sem filho para matar: mata o script inteiro.
-            # Ele sai com código 1; vagas e ficha de dono morto são limpas pelos outros.
+            # Ele sai com código 1; a ficha de dono morto é limpa pelos outros.
             if (-not $achou) { & taskkill.exe /PID ([int]$o.pid) /T /F *> $null }
             "matando: $alvo"
         } else { "cancelado: $alvo" }
@@ -202,19 +269,20 @@ switch ($argv[0]) {
 }
 
 # ---------------- rodar um comando pela fila ----------------
-$Nome = $null; $Sozinho = $false; $Tipo = $null
+$Nome = $null; $Sozinho = $false; $Tipo = $null; $Peso = $null
 $i = 0
 while ($i -lt $argv.Count) {
     $a = "$($argv[$i])"
     if ($a -eq '-Nome' -and $i + 1 -lt $argv.Count) { $Nome = "$($argv[$i + 1])"; $i += 2 }
     elseif ($a -eq '-Tipo' -and $i + 1 -lt $argv.Count) { $Tipo = "$($argv[$i + 1])"; $i += 2 }
+    elseif ($a -eq '-Peso' -and $i + 1 -lt $argv.Count) { $Peso = "$($argv[$i + 1])"; $i += 2 }
     elseif ($a -eq '-Sozinho') { $Sozinho = $true; $i++ }
     elseif ($a -eq '--') { $i++; break }
     else { break }
 }
 $Cmd = @($argv | Select-Object -Skip $i)
-if (-not $Nome -or $Cmd.Count -eq 0) {
-    Write-Host 'uso: fila-build.ps1 -Nome <sessão> [-Sozinho] [-Tipo <tipo>] <comando> [args...]'
+if (-not $Nome -or $Cmd.Count -eq 0 -or ($null -ne $Peso -and $Peso -notmatch '^[1-4]$')) {
+    Write-Host 'uso: fila-build.ps1 -Nome <sessão> [-Sozinho] [-Tipo <tipo>] [-Peso 1-4] <comando> [args...]'
     exit 2
 }
 $qual = Get-Command $Cmd[0] -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -224,7 +292,7 @@ if (-not $qual) {
 }
 $textoCmd = ($Cmd | ForEach-Object { if ("$_" -match '\s') { "`"$_`"" } else { "$_" } }) -join ' '
 if (-not $Tipo) { $Tipo = Tipo-Do-Comando $textoCmd $Sozinho }
-$quero = if ($Sozinho) { $Vagas.Count } else { 1 }
+$Peso = if ($Sozinho) { $Capacidade } elseif ($Peso) { [int]$Peso } else { Peso-Do-Comando $textoCmd $Tipo }
 $id = '{0}-{1}' -f [DateTime]::Now.ToString('yyyyMMdd-HHmmss-fff'), $PID
 $arqFicha = Join-Path $fichas "$id.json"
 $arqCancelar = Join-Path $fichas "$id.cancelar"
@@ -232,62 +300,53 @@ $log = Join-Path $logs "$id.log"
 $ficha = [ordered]@{
     id = $id; pid = $PID; inicioProc = (Inicio-Proc $PID); nome = $Nome; sessao = "$env:CLAUDE_CODE_SESSION_ID"
     tipo = $Tipo; cmd = $textoCmd; pasta = (Get-Location).Path; criado = (Agora); estado = 'espera'
-    comeco = $null; vagas = $quero; seguras = @(); log = $log
+    comeco = $null; peso = $Peso; log = $log
+    vagas = [int][Math]::Ceiling($Peso / 2); seguras = @()   # lidos pela versão de vagas, que ainda pode estar esperando
     emProcesso = $qual.CommandType -ne 'Application'   # .ps1/função: Matar tem de matar o script
 }
 function Gravar-Ficha { Gravar-Atomico $arqFicha ($ficha | ConvertTo-Json -Compress) }
-
-$minhas = [Collections.Generic.List[string]]::new()   # pastas de vaga que este pedido segura
-function Soltar-Vagas { foreach ($l in $minhas) { Remove-Item -LiteralPath (Join-Path $dir $l) -Recurse -Force -ErrorAction SilentlyContinue }; $minhas.Clear() }
 
 Gravar-Ficha
 $avisou = $false
 $cancelado = $false
 try {
-    while ($minhas.Count -lt $quero + [int]$Sozinho) {
+    while ($true) {
         if (Test-Path -LiteralPath $arqCancelar) { $cancelado = $true; break }
+        if ($medindo) { Medir-Maquina }
         $lista = Ler-Fichas
-        if ($null -ne $lista -and -not (Test-Path -LiteralPath (Join-Path $dir 'pausa'))) {
-            $fila = Ordem-Espera $lista
-            # Vagas livres menos o que falta a quem está na frente: só os primeiros da ordem entram.
-            $saldo = @($Vagas | Where-Object { $minhas -notcontains $_ -and (Vaga-Livre $_) }).Count
-            foreach ($o in $fila) {
-                if ($o.id -eq $id) { break }
-                $saldo -= [Math]::Max(0, [int]$o.vagas - @($o.seguras | Where-Object { $_ -ne 'sozinho' }).Count)
-            }
-            if ($saldo -ge 1) {
-                # -Sozinho pega antes a pasta 'sozinho' (só um por vez, também contra a versão antiga),
-                # senão dois -Sozinho ficariam com uma vaga cada esperando o outro.
-                if ($Sozinho -and $minhas -notcontains 'sozinho') {
-                    if (Pegar-Pasta 'sozinho') { $minhas.Add('sozinho'); $ficha.seguras = @($minhas); Gravar-Ficha }
-                }
-                if (-not $Sozinho -or $minhas -contains 'sozinho') {
-                    foreach ($v in $Vagas) {
-                        if ($minhas -notcontains $v -and (Pegar-Pasta $v)) {
-                            $minhas.Add($v)
-                            $ficha.seguras = @($minhas)
-                            Gravar-Ficha
-                            break
+        $pausada = Test-Path -LiteralPath (Join-Path $dir 'pausa')
+        # Olha sem a trava; se parece que entra, confere de novo dentro dela e já grava 'rodando'.
+        if ($null -ne $lista -and -not $pausada -and (Posso-Entrar $lista)) {
+            $entrou = $false
+            try {
+                $entrou = Com-Trava {
+                    $agora = Ler-Fichas
+                    if ($null -eq $agora -or (Test-Path -LiteralPath (Join-Path $dir 'pausa')) -or -not (Posso-Entrar $agora)) { return $false }
+                    $pesados = @($agora | Where-Object { $_.estado -eq 'rodando' -and $_.peso -ge 2 }).Count + @($Vagas | Where-Object { -not (Vaga-Livre $_) }).Count
+                    if ($Peso -ge 2 -and $pesados -gt 0) {
+                        foreach ($v in 'CARGO_BUILD_JOBS', 'CMAKE_BUILD_PARALLEL_LEVEL') {
+                            if (-not [Environment]::GetEnvironmentVariable($v)) { [Environment]::SetEnvironmentVariable($v, '8') }
                         }
+                        Write-Host "fila-build: outro pesado rodando; CARGO_BUILD_JOBS=$env:CARGO_BUILD_JOBS CMAKE_BUILD_PARALLEL_LEVEL=$env:CMAKE_BUILD_PARALLEL_LEVEL"
                     }
+                    $ficha.estado = 'rodando'; $ficha.comeco = Agora
+                    Gravar-Ficha
+                    $true
                 }
-            }
-            if ($minhas.Count -ge $quero + [int]$Sozinho) { break }
+            } catch { Write-Host "fila-build: $_" }
+            if ($entrou) { break }
         }
         if (-not $avisou -and $null -ne $lista) {
             $pos = [Array]::IndexOf(@((Ordem-Espera $lista) | ForEach-Object { $_.id }), $id) + 1
             $rodando = @($lista | Where-Object { $_.estado -eq 'rodando' } | ForEach-Object { $_.nome })
-            $pausa = if (Test-Path -LiteralPath (Join-Path $dir 'pausa')) { ' (fila PAUSADA no painel)' } else { '' }
-            Write-Host "fila-build: na fila em #$pos (id $id)$pausa; rodando agora: '$($rodando -join "', '")'"
+            $pausa = if ($pausada) { ' (fila PAUSADA no painel)' } else { '' }
+            Write-Host "fila-build: na fila em #$pos (id $id, $Peso ponto(s); em uso $(Pontos-Em-Uso $lista)/$Capacidade)$pausa; rodando agora: '$($rodando -join "', '")'"
             $avisou = $true
         }
         Start-Sleep -Seconds 1
     }
-    if (-not $cancelado) {
-        $ficha.estado = 'rodando'; $ficha.comeco = Agora
-        Gravar-Ficha
-        $cancelado = Test-Path -LiteralPath $arqCancelar
-    }
+    # Cancelado logo depois de entrar: a bandeira pode ter chegado entre a última olhada e a gravação.
+    if (-not $cancelado) { $cancelado = Test-Path -LiteralPath $arqCancelar }
     if ($cancelado) {
         Write-Host "fila-build: '$Nome' foi cancelado no painel antes de começar; o comando NÃO rodou."
         exit 1
@@ -322,13 +381,11 @@ try {
         $morto = Test-Path -LiteralPath $arqCancelar
         $fim = Get-Date
         $reg = [ordered]@{
-            id = $id; nome = $Nome; sessao = $ficha.sessao; tipo = $Tipo; cmd = $textoCmd; pasta = $ficha.pasta
+            id = $id; nome = $Nome; sessao = $ficha.sessao; tipo = $Tipo; peso = $Peso; cmd = $textoCmd; pasta = $ficha.pasta
             comeco = $ficha.comeco; fim = $fim.ToString('o'); segundos = [Math]::Round(($fim - $t0).TotalSeconds, 1)
             codigo = $(if ($null -eq $codigo) { if ($morto) { -1 } else { 0 } } else { $codigo }); cancelado = $morto; log = $log
         }
-        # A ficha sai antes das vagas: senão, por um instante, ela ainda diz 'rodando' ao lado de quem entrou.
-        Remove-Item -LiteralPath $arqFicha -Force -ErrorAction SilentlyContinue
-        Soltar-Vagas
+        Remove-Item -LiteralPath $arqFicha -Force -ErrorAction SilentlyContinue   # solta os pontos
         try {
             Com-Trava {
                 $h = Join-Path $dir 'historico.jsonl'
@@ -344,6 +401,5 @@ try {
     }
     exit $codigo
 } finally {
-    Soltar-Vagas
     Remove-Item -LiteralPath $arqFicha, $arqCancelar -Force -ErrorAction SilentlyContinue
 }

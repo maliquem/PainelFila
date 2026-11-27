@@ -1,5 +1,17 @@
 // Contas puras do painel (sem $): testadas em tests/logica.test.ts.
-import type { Ficha, Hist, Limite, Sessao, Tarefa } from '../types'
+import type { Ficha, Hist, Limite, Sessao, Tarefa, Velha } from '../types'
+
+export const CAPACIDADE = 4
+
+// Mesma conta do fila-build.ps1: ficha da versão de vagas não tem peso e vale 2 por vaga.
+export function pesoDe(f: Ficha): number {
+  return f.peso ?? Math.min(CAPACIDADE, 2 * Math.max(1, f.vagas ?? 1))
+}
+
+// Pontos em uso: o peso de cada pedido rodando e 2 por vaga (lock, lock2) da versão antiga sem id.
+export function pontosEmUso(rodando: readonly Ficha[], velhas: readonly Velha[]): number {
+  return rodando.reduce((n, f) => n + pesoDe(f), 0) + 2 * velhas.filter(v => v.vaga !== 'sozinho').length
+}
 
 // Mesma regra do fila-build.ps1: quem já segura alguma pasta vai na frente; depois a ordem de ordem.txt
 // e os outros por chegada (id).

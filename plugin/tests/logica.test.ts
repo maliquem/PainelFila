@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { Ficha, Hist } from '../types'
-import { acessoRemoto, curto, dur, estimativa, fimMaisNovo, idNaLista, medidores, novosNoHistorico, ordenarFila, textoDoAviso, tipoDoComando, ultimasLinhas } from '../hooks/logica'
+import type { Ficha, Hist, Velha } from '../types'
+import { pontosEmUso, acessoRemoto, curto, dur, estimativa, fimMaisNovo, idNaLista, medidores, novosNoHistorico, ordenarFila, textoDoAviso, tipoDoComando, ultimasLinhas } from '../hooks/logica'
 
 const f = (id: string, estado: Ficha['estado'] = 'espera') => ({ id, estado }) as Ficha
 const h = (o: Partial<Hist>) => ({ tipo: 'Build', pasta: 'K:\\a', cancelado: false, segundos: 10, codigo: 0, fim: '', nome: 'n', ...o }) as Hist
@@ -12,6 +12,15 @@ test('ordem: primeiro ordem.txt, depois por chegada; rodando fica fora', async (
   // quem já segura uma pasta (um -Sozinho com 'sozinho') fica na frente mesmo com outro no topo
   const s1 = { ...f('5'), seguras: ['sozinho'] } as Ficha
   expect(ordenarFila([f('6'), s1], ['6']).map(x => x.id)).toEqual(['5', '6'])
+})
+
+test('pontos em uso: peso da ficha, 2 por vaga na ficha velha e 2 por lock antigo', async () => {
+  const r = (o: Partial<Ficha>) => ({ ...f('x', 'rodando'), ...o }) as Ficha
+  const v = (vaga: string) => ({ vaga, nome: 'n', desde: '' }) as Velha
+  expect(pontosEmUso([], [])).toBe(0)
+  expect(pontosEmUso([r({ peso: 1 }), r({ peso: 2 })], [])).toBe(3)
+  expect(pontosEmUso([r({ vagas: 1 }), r({ vagas: 2 })], [])).toBe(6)
+  expect(pontosEmUso([], [v('lock'), v('sozinho')])).toBe(2)
 })
 
 test('tipo deduzido igual ao script', async () => {

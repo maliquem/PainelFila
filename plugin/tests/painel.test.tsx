@@ -30,8 +30,7 @@ const ficha = (id: string, nome: string, estado: 'espera' | 'rodando', extra: ob
     criado: iso(60),
     estado,
     comeco: estado === 'rodando' ? iso(30) : null,
-    vagas: 1,
-    seguras: [],
+    peso: 2,
     log: `${DADOS}\\logs\\${id}.log`,
     ...extra,
   })
@@ -129,15 +128,15 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas
   for (const surface of ['desktop', 'terminal'] as const) {
     // Painel estreito, como no app desktop.
     const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface })
-    expect((await ui.find({ type: 'Text', text: /1 rodando · 2 na fila/ }))?.text).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: /1 rodando · 2\/4 pontos · 2 na fila/ }))?.text).toBeDefined()
     const rodando = texto(await ui.find({ key: 'r-1-a' }))
     expect(rodando).toMatch(/Build alfa/)
     // ±1 s: o relógio anda entre montar a ficha e desenhar.
-    expect(rodando).toMatch(/▰+▱+ há (29|30|31|32)s · est\. 2m30s/)
+    expect(rodando).toMatch(/▰+▱+ há (29|30|31|32)s · est\. 2m30s · 2 pontos/)
     expect(rodando).toMatch(/cargo build -p alfa/)
     // Um cartão por seção, com a borda na cor dela e o estado no cabeçalho.
     for (const [key, borderColor, estado] of [
-      ['sec-rodando', 'claude', /^Rodando ● 1 rodando/],
+      ['sec-rodando', 'claude', /^Rodando ● 1 rodando · 2\/4 pontos/],
       ['sec-fila', 'suggestion', /^Na fila 2 na fila/],
       ['sec-sessoes', 'merged', /^Sessões ativas 1 ativa /],
     ] as const) {
@@ -181,7 +180,7 @@ test('o painel mostra rodando, a fila na ordem do ordem.txt e as sessões ativas
 
   // Minimizado (widget): só o resumo e o que roda.
   const mini = await $.ui.mount({ ...PANE, props: { ...PANE.props, placement: 'widget' }, surface: 'desktop' })
-  expect((await mini.find({ type: 'Text', text: /1 rodando · 2 na fila/ }))?.text).toBeDefined()
+  expect((await mini.find({ type: 'Text', text: /1 rodando · 2\/4 pontos · 2 na fila/ }))?.text).toBeDefined()
   expect((await mini.find({ type: 'Text', text: /alfa/ }))?.text).toMatch(/há (29|30|31|32)s/)
   expect(await mini.find({ type: 'Text', text: /gama/ })).toBeUndefined()
   await mini.unmount()

@@ -7,6 +7,7 @@ import type { Ficha, Foto, Hist, Sessao, Sub, Tarefa, Velha } from '../types'
 import {
   acessoRemoto,
   arvoreDeSessoes,
+  CAPACIDADE,
   barra,
   curto,
   desde,
@@ -19,6 +20,8 @@ import {
   nomeDoModelo,
   novosNoHistorico,
   ordenarFila,
+  pesoDe,
+  pontosEmUso,
   tarefasDaSessao,
   textoDoAviso,
   tipoDaTarefa,
@@ -492,7 +495,8 @@ export const register: Register = on => {
 
     const verLog = (id: string) => update($, logDe, v => (v === id ? '' : id)).then(() => atualizar($))
     const nRodando = f.rodando.length + f.velhas.length
-    const resumo = `${nRodando} rodando · ${f.fila.length} na fila${f.pausada ? ' · pausada' : ''}`
+    const pontos = `${pontosEmUso(f.rodando, f.velhas)}/${CAPACIDADE} pontos`
+    const resumo = `${nRodando} rodando · ${pontos} · ${f.fila.length} na fila${f.pausada ? ' · pausada' : ''}`
 
     // Minimizado no app desktop: só o resumo e o que roda agora.
     if (e.props.placement === 'widget') {
@@ -663,7 +667,7 @@ export const register: Register = on => {
 
         {faixa}
 
-        {secao('sec-rodando', 'Rodando', 'claude', nRodando > 0, nRodando > 0 ? `● ${nRodando} rodando` : '○ parada', [
+        {secao('sec-rodando', 'Rodando', 'claude', nRodando > 0, nRodando > 0 ? `● ${nRodando} rodando · ${pontos}` : '○ parada', [
           ...f.rodando.map(r => {
             const passou = desde(r.comeco, f.agora)
             const prev = estimativa(f.historico, r.tipo, r.pasta)
@@ -680,7 +684,7 @@ export const register: Register = on => {
                     <Text color={corDoTipo(r.tipo)}>{barra(Math.min(passou, prev), prev)}</Text>
                   </Box>
                 ),
-                tempos('há ', passou, prev, r.vagas > 1 ? ' · 2 vagas' : ''),
+                tempos('há ', passou, prev, pesoDe(r) > 1 ? ` · ${pesoDe(r)} pontos` : ''),
               ],
               r.cmd,
               [
